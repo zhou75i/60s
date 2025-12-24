@@ -72,8 +72,8 @@
             bgImageUrl: 'https://github.com/zhou75i/60s/blob/main/img/1.png',
             // 底部图（第三张图）URL（建议替换为自己仓库的图片路径）
             footerImageUrl: 'https://github.com/zhou75i/60s/blob/main/img/2.png',
-            // 60s新闻接口
-            apiUrl: 'https://apps.is-an.ai/apis/60s/?type=text',
+            // 新的60s新闻接口
+            apiUrl: 'https://60s.viki.moe/v2/60s',
             // 文字样式配置
             font: {
                 size: 26,        // 字体大小
@@ -90,27 +90,21 @@
         };
 
         /**
-         * 解析接口返回的文本数据
-         * @param {string} text 接口原始文本
+         * 解析新接口返回的JSON数据
+         * @param {object} json 接口返回的JSON对象
          * @returns {object} 解析后的结构化数据
          */
-        function parseNewsData(text) {
-            const lines = text.split('\n').filter(line => line.trim());
-            const result = { date: '', yiyan: '', news: [], weiyu: '' };
-
-            lines.forEach(line => {
-                const trimed = line.trim();
-                if (trimed.startsWith('202')) {
-                    result.date = trimed; // 解析日期行
-                } else if (trimed.startsWith('【一言】')) {
-                    result.yiyan = trimed.replace('【一言】', ''); // 解析一言
-                } else if (trimed.match(/^\d+、/)) {
-                    result.news.push(trimed); // 解析新闻列表
-                } else if (trimed.startsWith('【微语】')) {
-                    result.weiyu = trimed.replace('【微语】', ''); // 解析微语
-                }
-            });
-            return result;
+        function parseNewsData(json) {
+            const data = json.data;
+            // 拼接日期（格式：2025-12-24 农历·乙巳年十一月初五 / 星期三）
+            const dateStr = `${data.date} 农历·${data.lunar_date} / ${data.day_of_week}`;
+            // 新闻列表添加序号（1、2、3...）
+            const newsList = data.news.map((item, index) => `${index + 1}、${item}`);
+            return {
+                date: dateStr,   // 拼接后的日期
+                news: newsList,  // 带序号的新闻列表
+                weiyu: data.tip  // tip对应微语
+            };
         }
 
         /**
@@ -149,11 +143,13 @@
          */
         async function generateFinalImage() {
             try {
-                // 1. 获取接口数据
+                // 1. 获取新接口JSON数据
                 const res = await fetch(CONFIG.apiUrl);
                 if (!res.ok) throw new Error(`接口请求失败：${res.status}`);
-                const rawText = await res.text();
-                const newsData = parseNewsData(rawText);
+                const rawJson = await res.json();
+                if (rawJson.code !== 200) throw new Error(`接口返回异常：${rawJson.message}`);
+                
+                const newsData = parseNewsData(rawJson);
                 console.log('解析后的新闻数据：', newsData);
 
                 // 2. 加载背景图和底部图（处理跨域）
@@ -186,35 +182,30 @@
                 dateLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
                 currentY = dateLines.at(-1).y + lineHeight * 1.5; // 日期与下一部分的间距
 
-                // 8. 绘制一言（如有）
-                if (newsData.yiyan) {
-                    const yiyanLines = wrapText(ctx, newsData.yiyan, CONFIG.padding.left, currentY, maxWidth);
-                    yiyanLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
-                    currentY = yiyanLines.at(-1).y + lineHeight * 1.5;
-                }
-
-                // 9. 绘制新闻列表
+                // 8. 绘制新闻列表
                 newsData.news.forEach(news => {
                     const newsLines = wrapText(ctx, news, CONFIG.padding.left, currentY, maxWidth);
                     newsLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
                     currentY = newsLines.at(-1).y + lineHeight * 1.2;
                 });
 
-                // 10. 绘制微语（如有）
+                // 9. 绘制微语（如有）
                 if (newsData.weiyu) {
-                    const weiyuLines = wrapText(ctx, newsData.weiyu, CONFIG.padding.left, currentY, maxWidth);
+                    // 微语前加【微语】标识，保持和原样式一致
+                    const weiyuText = `【微语】${newsData.weiyu}`;
+                    const weiyuLines = wrapText(ctx, weiyuText, CONFIG.padding.left, currentY, maxWidth);
                     weiyuLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
                     currentY = weiyuLines.at(-1).y + lineHeight;
                 }
 
-                // 11. 裁剪空白区域：只保留有内容的部分
+                // 10. 裁剪空白区域：只保留有内容的部分
                 const contentHeight = currentY + CONFIG.padding.bottom;
                 const cropCanvas = createCropCanvas(canvas, contentHeight);
 
-                // 12. 拼接底部图片
+                // 11. 拼接底部图片
                 const finalCanvas = createFinalCanvas(cropCanvas, footerImg);
 
-                // 13. 显示最终结果
+                // 12. 显示最终结果
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('result-box').style.display = 'block';
                 document.getElementById('result-img').src = finalCanvas.toDataURL('image/png');
@@ -279,4 +270,4 @@
         window.addEventListener('load', generateFinalImage);
     </script>
 </body>
-</html>
+</html>            
