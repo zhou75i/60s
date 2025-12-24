@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>60s读懂世界</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #fff; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 20px; }
+        #img-result { max-width: 100%; height: auto; }
+        canvas { display: none; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <img id="img-result" alt="60s读懂世界" />
+
+    <script>
+        let DATA = window.DATA || {}; // 外部注入的爬取数据
+        const CONFIG = {
+            bannerUrl: 'https://raw.githubusercontent.com/zhou75i/60s/main/img/1.png',
+            footerUrl: 'https://raw.githubusercontent.com/zhou75i/60s/main/img/2.png',
+            fontUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/fonts/DouyinSansBold.otf',
+            dateY: 290,
+            newsStartY: 430,
+            font: {
+                date: { size: 32, family: 'DouyinSansBold', color: '#ffffff', weight: 'normal' },
+                news: { size: 28, family: 'DouyinSansBold', color: '#333333' },
+                weiyu: { size: 26, family: 'DouyinSansBold', color: '#666666' },
+                lineHeight: 1.8
+            },
+            padding: { left: 50, right: 50 },
+            clipExtra: 20
+        };
+
+        // 加载自定义字体
+        async function loadCustomFont() {
+            try {
+                const font = new FontFace('DouyinSansBold', `url(${CONFIG.fontUrl})`);
+                await font.load();
+                document.fonts.add(font);
+            } catch (err) {
+                const link = document.createElement('link');
+                link.href = 'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@700&display=swap';
+                link.rel = 'stylesheet';
+                document.head.appendChild(link);
+                CONFIG.font.date.family = CONFIG.font.news.family = CONFIG.font.weiyu.family = 'Noto Sans SC';
+            }
+        }
+
+        // 格式化日期
+        function formatDate(rawDate, lunarDate) {
+            const [year, month, day] = rawDate.split('-');
+            const solarDate = `${year}年${month}月${day}日`;
+            return `${solarDate} 农历 · ${lunarDate || ''} / 星期三`;
+        }
+
+        // 文本换行
+        function wrapText(ctx, text, x, y, maxWidth, fontConfig, isCenter = false) {
+            ctx.font = `${fontConfig.weight || 'normal'} ${fontConfig.size}px ${fontConfig.family}`;
+            ctx.fillStyle = fontConfig.color;
+            ctx.textBaseline = 'top';
+            let lines = [], currentLine = '', currentY = y;
+            const lineH = fontConfig.size * CONFIG.font.lineHeight;
+            for (let char of text) {
+                const testLine = currentLine + char;
+                if (ctx.measureText(testLine).width > maxWidth && currentLine) {
+                    lines.push({ text: currentLine, y: currentY, width: ctx.measureText(currentLine).width });
+                    currentLine = char;
+                    currentY += lineH;
+                } else currentLine = testLine;
+            }
+            if (currentLine) lines.push({ text: currentLine, y: currentY, width: ctx.measureText(currentLine).width });
+            return lines.map(line => ({
+                ...line,
+                x: isCenter ? (ctx.canvas.width - line.width) / 2 : x
+            }));
+        }
+
+        // 生成图片核心逻辑
+        async function generate() {
+            await loadCustomFont();
+            if (!DATA.news || !DATA.date) throw new Error('缺少新闻数据');
+
+            // 处理数据
+            const formatDateStr = formatDate(DATA.date, DATA.lunar_date);
+            const newsData = {
+                date: formatDateStr,
+                news: DATA.news.map((n, i) => `${i+1}、${n}`),
+                weiyu: `【微语】${DATA.tip || ''}`
+            };
+
+            // 加载图片资源
+            const loadImage = url => new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error(`加载图片失败: ${url}`));
+                img.src = url;
+            });
+            const [bannerImg, footerImg] = await Promise.all([
+                loadImage(CONFIG.bannerUrl),
+                loadImage(CONFIG.footerUrl)
+            ]);
+            const canvasW = bannerImg.width;
+
+            // 绘制画布
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = canvasW;
+            canvas.height = 5000;
+
+            // 白色背景
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvasW, canvas.height);
+            // 绘制banner
+            ctx.drawImage(bannerImg, 0, 0);
+
+            // 绘制日期
+            const dateLines = wrapText(ctx, newsData.date, 0, CONFIG.dateY, canvasW - CONFIG.padding.left - CONFIG.padding.right, CONFIG.font.date, true);
+            dateLines.forEach(line => ctx.fillText(line.text, line.x, line.y));
+
+            // 绘制新闻
+            let currentY = CONFIG.newsStartY;
+            const newsMaxW = canvasW - CONFIG.padding.left - CONFIG.padding.right;
+            for (let news of newsData.news) {
+                const newsLines = wrapText(ctx, news, CONFIG.padding.left, currentY, newsMaxW, CONFIG.font.news);
+                newsLines.forEach(line => ctx.fillText(line.text, line.x, line.y));
+                currentY = newsLines.at(-1).y + CONFIG.font.news.size * CONFIG.font.lineHeight * 1.1;
+            }
+
+            // 绘制微语
+            const weiyuLines = wrapText(ctx, newsData.weiyu, CONFIG.padding.left, currentY, newsMaxW, CONFIG.font.weiyu);
+            weiyuLines.forEach(line => ctx.fillText(line.text, line.x, line.y));
+
+            // 裁剪画布
+            const clipHeight = weiyuLines.at(-1).y + CONFIG.font.weiyu.size * CONFIG.font.lineHeight + CONFIG.clipExtra;
+            const clipCanvas = document.createElement('canvas');
+            clipCanvas.width = canvasW;
+            clipCanvas.height = clipHeight;
+            const clipCtx = clipCanvas.getContext('2d');
+            clipCtx.fillStyle = '#ffffff';
+            clipCtx.fillRect(0, 0, canvasW, clipHeight);
+            clipCtx.drawImage(canvas, 0, 0, canvasW, clipHeight, 0, 0, canvasW, clipHeight);
+
+            // 拼接底部图
+            const finalCanvas = document.createElement('canvas');
+            finalCanvas.width = canvasW;
+            finalCanvas.height = clipHeight + footerImg.height;
+            const finalCtx = finalCanvas.getContext('2d');
+            finalCtx.fillStyle = '#ffffff';
+            finalCtx.fillRect(0, 0, canvasW, finalCanvas.height);
+            finalCtx.drawImage(clipCanvas, 0, 0);
+            finalCtx.drawImage(footerImg, 0, clipHeight);
+
+            // 生成Base64并暴露到window
+            window.IMAGE_BASE64 = finalCanvas.toDataURL('image/png', 1.0);
+            document.getElementById('img-result').src = window.IMAGE_BASE64;
+        }
+
+        // 执行生成
+        generate().catch(err => {
+            console.error('生成失败:', err);
+            window.IMAGE_ERROR = err.message;
+        });
+    </script>
+</body>
+</html>
