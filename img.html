@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>60s读懂世界 - 图片生成</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            padding: 20px;
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        #canvas {
+            display: none; /* 隐藏中间画布 */
+        }
+        .result-box {
+            margin-top: 20px;
+            text-align: center;
+        }
+        #result-img {
+            max-width: 100%;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        .tips {
+            margin-top: 10px;
+            color: #666;
+            font-size: 14px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 16px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>每天60s读懂世界 - 图片生成</h1>
+        <div class="loading" id="loading">正在加载数据并生成图片...</div>
+        <canvas id="canvas"></canvas>
+        <div class="result-box" id="result-box" style="display: none;">
+            <h3>生成结果</h3>
+            <img id="result-img" alt="生成的60s新闻图片">
+            <p class="tips">右键可保存图片</p>
+        </div>
+    </div>
+
+    <script>
+        // 核心配置
+        const CONFIG = {
+            // 背景图（第二张图）URL（建议替换为自己仓库的图片路径）
+            bgImageUrl: 'https://github.com/zhou75i/60s/blob/main/img/1.png',
+            // 底部图（第三张图）URL（建议替换为自己仓库的图片路径）
+            footerImageUrl: 'https://github.com/zhou75i/60s/blob/main/img/2.png',
+            // 60s新闻接口
+            apiUrl: 'https://apps.is-an.ai/apis/60s/?type=text',
+            // 文字样式配置
+            font: {
+                size: 26,        // 字体大小
+                family: 'SimSun, Microsoft YaHei, Arial', // 字体（兼容不同设备）
+                color: '#333333',// 字体颜色
+                lineHeight: 1.8  // 行高倍数
+            },
+            // 绘制位置配置
+            padding: {
+                left: 45,        // 左内边距
+                top: 85,         // 上内边距
+                bottom: 20       // 内容底部内边距
+            }
+        };
+
+        /**
+         * 解析接口返回的文本数据
+         * @param {string} text 接口原始文本
+         * @returns {object} 解析后的结构化数据
+         */
+        function parseNewsData(text) {
+            const lines = text.split('\n').filter(line => line.trim());
+            const result = { date: '', yiyan: '', news: [], weiyu: '' };
+
+            lines.forEach(line => {
+                const trimed = line.trim();
+                if (trimed.startsWith('202')) {
+                    result.date = trimed; // 解析日期行
+                } else if (trimed.startsWith('【一言】')) {
+                    result.yiyan = trimed.replace('【一言】', ''); // 解析一言
+                } else if (trimed.match(/^\d+、/)) {
+                    result.news.push(trimed); // 解析新闻列表
+                } else if (trimed.startsWith('【微语】')) {
+                    result.weiyu = trimed.replace('【微语】', ''); // 解析微语
+                }
+            });
+            return result;
+        }
+
+        /**
+         * 文字自动换行处理
+         * @param {CanvasRenderingContext2D} ctx Canvas上下文
+         * @param {string} text 要换行的文字
+         * @param {number} x 起始X坐标
+         * @param {number} y 起始Y坐标
+         * @param {number} maxWidth 单行最大宽度
+         * @returns {array} 换行后的每行文字及坐标
+         */
+        function wrapText(ctx, text, x, y, maxWidth) {
+            const words = text.split('');
+            let line = '';
+            const lineHeights = CONFIG.font.size * CONFIG.font.lineHeight;
+            const lines = [];
+            let currentY = y;
+
+            for (let i = 0; i < words.length; i++) {
+                const testLine = line + words[i];
+                const testWidth = ctx.measureText(testLine).width;
+                if (testWidth > maxWidth && i > 0) {
+                    lines.push({ text: line, y: currentY });
+                    line = words[i];
+                    currentY += lineHeights;
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push({ text: line, y: currentY });
+            return lines;
+        }
+
+        /**
+         * 核心：生成最终图片
+         */
+        async function generateFinalImage() {
+            try {
+                // 1. 获取接口数据
+                const res = await fetch(CONFIG.apiUrl);
+                if (!res.ok) throw new Error(`接口请求失败：${res.status}`);
+                const rawText = await res.text();
+                const newsData = parseNewsData(rawText);
+                console.log('解析后的新闻数据：', newsData);
+
+                // 2. 加载背景图和底部图（处理跨域）
+                const [bgImg, footerImg] = await Promise.all([
+                    loadImage(CONFIG.bgImageUrl),
+                    loadImage(CONFIG.footerImageUrl)
+                ]);
+
+                // 3. 初始化画布
+                const canvas = document.getElementById('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = bgImg.width;
+                canvas.height = bgImg.height;
+
+                // 4. 绘制背景图
+                ctx.drawImage(bgImg, 0, 0);
+
+                // 5. 设置文字样式
+                ctx.font = `${CONFIG.font.size}px ${CONFIG.font.family}`;
+                ctx.fillStyle = CONFIG.font.color;
+                ctx.textBaseline = 'top';
+
+                // 6. 计算绘制区域最大宽度
+                const maxWidth = canvas.width - 2 * CONFIG.padding.left;
+                const lineHeight = CONFIG.font.size * CONFIG.font.lineHeight;
+                let currentY = CONFIG.padding.top;
+
+                // 7. 绘制日期
+                const dateLines = wrapText(ctx, newsData.date, CONFIG.padding.left, currentY, maxWidth);
+                dateLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
+                currentY = dateLines.at(-1).y + lineHeight * 1.5; // 日期与下一部分的间距
+
+                // 8. 绘制一言（如有）
+                if (newsData.yiyan) {
+                    const yiyanLines = wrapText(ctx, newsData.yiyan, CONFIG.padding.left, currentY, maxWidth);
+                    yiyanLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
+                    currentY = yiyanLines.at(-1).y + lineHeight * 1.5;
+                }
+
+                // 9. 绘制新闻列表
+                newsData.news.forEach(news => {
+                    const newsLines = wrapText(ctx, news, CONFIG.padding.left, currentY, maxWidth);
+                    newsLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
+                    currentY = newsLines.at(-1).y + lineHeight * 1.2;
+                });
+
+                // 10. 绘制微语（如有）
+                if (newsData.weiyu) {
+                    const weiyuLines = wrapText(ctx, newsData.weiyu, CONFIG.padding.left, currentY, maxWidth);
+                    weiyuLines.forEach(line => ctx.fillText(line.text, CONFIG.padding.left, line.y));
+                    currentY = weiyuLines.at(-1).y + lineHeight;
+                }
+
+                // 11. 裁剪空白区域：只保留有内容的部分
+                const contentHeight = currentY + CONFIG.padding.bottom;
+                const cropCanvas = createCropCanvas(canvas, contentHeight);
+
+                // 12. 拼接底部图片
+                const finalCanvas = createFinalCanvas(cropCanvas, footerImg);
+
+                // 13. 显示最终结果
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('result-box').style.display = 'block';
+                document.getElementById('result-img').src = finalCanvas.toDataURL('image/png');
+
+            } catch (err) {
+                console.error('生成图片失败：', err);
+                document.getElementById('loading').innerText = `生成失败：${err.message}`;
+            }
+        }
+
+        /**
+         * 加载图片（处理跨域）
+         * @param {string} url 图片URL
+         * @returns {Promise<HTMLImageElement>} 加载完成的图片对象
+         */
+        function loadImage(url) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous'; // 解决跨域画布污染问题
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error(`图片加载失败：${url}`));
+                img.src = url;
+            });
+        }
+
+        /**
+         * 裁剪Canvas空白区域
+         * @param {HTMLCanvasElement} source 源Canvas
+         * @param {number} contentHeight 实际内容高度
+         * @returns {HTMLCanvasElement} 裁剪后的Canvas
+         */
+        function createCropCanvas(source, contentHeight) {
+            const cropCanvas = document.createElement('canvas');
+            const cropCtx = cropCanvas.getContext('2d');
+            cropCanvas.width = source.width;
+            cropCanvas.height = contentHeight;
+            // 复制源Canvas的内容到裁剪Canvas
+            cropCtx.drawImage(source, 0, 0, source.width, contentHeight, 0, 0, source.width, contentHeight);
+            return cropCanvas;
+        }
+
+        /**
+         * 拼接底部图片生成最终Canvas
+         * @param {HTMLCanvasElement} cropCanvas 裁剪后的内容Canvas
+         * @param {HTMLImageElement} footerImg 底部图片
+         * @returns {HTMLCanvasElement} 最终拼接后的Canvas
+         */
+        function createFinalCanvas(cropCanvas, footerImg) {
+            const finalCanvas = document.createElement('canvas');
+            const finalCtx = finalCanvas.getContext('2d');
+            // 设置最终画布尺寸：宽度与内容一致，高度=内容高度+底部图高度
+            finalCanvas.width = cropCanvas.width;
+            finalCanvas.height = cropCanvas.height + footerImg.height;
+            // 绘制裁剪后的内容
+            finalCtx.drawImage(cropCanvas, 0, 0);
+            // 绘制底部图片（内容下方）
+            finalCtx.drawImage(footerImg, 0, cropCanvas.height);
+            return finalCanvas;
+        }
+
+        // 页面加载完成后执行生成逻辑
+        window.addEventListener('load', generateFinalImage);
+    </script>
+</body>
+</html>
