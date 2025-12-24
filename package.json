@@ -1,0 +1,14 @@
+{
+  "name": "60s-crawl",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/update60s.js",
+  "scripts": {
+    "crawl": "node src/update60s.js"
+  },
+  "dependencies": {
+    "@octokit/rest": "^20.0.2",
+    "dotenv": "^16.4.5",
+    "puppeteer": "^22.12.1"
+  }
+}
