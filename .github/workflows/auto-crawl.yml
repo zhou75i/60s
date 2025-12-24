@@ -1,0 +1,40 @@
+name: Auto Crawl 60s Data and Generate Image
+
+# 定时触发：北京时间1:20-2:30每10分钟执行（UTC=北京时间-8 → UTC 17:00-18:00）
+on:
+  schedule:
+    - cron: '0,10,20,30,40,50 17 * * *'
+  workflow_dispatch: # 手动触发（方便测试）
+
+jobs:
+  crawl-and-generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Puppeteer系统依赖（Ubuntu）
+        run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm-dev libxkbcommon-dev libgbm-dev libasound-dev libatspi2.0-0 libxshmfence-dev
+
+      - name: Run crawl script
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+          BRANCH: main
+        run: npm run crawl
+
+      - name: 自动提交图片（可选）
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'Auto update 60s image for ${{ github.run_date }}'
+          file_pattern: 'static/images/*.png'
