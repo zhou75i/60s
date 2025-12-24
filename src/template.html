@@ -16,7 +16,7 @@
     <img id="img-result" alt="60s读懂世界" />
 
     <script>
-        let DATA = window.DATA || {}; // 外部注入的爬取数据
+        let DATA = window.DATA || {}; // 从API注入的数据
         const CONFIG = {
             bannerUrl: 'https://raw.githubusercontent.com/zhou75i/60s/main/img/1.png',
             footerUrl: 'https://raw.githubusercontent.com/zhou75i/60s/main/img/2.png',
@@ -48,11 +48,14 @@
             }
         }
 
-        // 格式化日期
+        // 格式化日期（适配API返回的农历日期）
         function formatDate(rawDate, lunarDate) {
             const [year, month, day] = rawDate.split('-');
             const solarDate = `${year}年${month}月${day}日`;
-            return `${solarDate} 农历 · ${lunarDate || ''} / 星期三`;
+            // 获取星期几
+            const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+            const weekDay = weekDays[new Date(rawDate).getDay()];
+            return `${solarDate} 农历 · ${lunarDate || ''} / ${weekDay}`;
         }
 
         // 文本换行
@@ -80,14 +83,14 @@
         // 生成图片核心逻辑
         async function generate() {
             await loadCustomFont();
-            if (!DATA.news || !DATA.date) throw new Error('缺少新闻数据');
+            if (!DATA.news || !DATA.date) throw new Error('缺少核心数据：date/news');
 
-            // 处理数据
+            // 处理数据（适配API返回结构）
             const formatDateStr = formatDate(DATA.date, DATA.lunar_date);
             const newsData = {
                 date: formatDateStr,
                 news: DATA.news.map((n, i) => `${i+1}、${n}`),
-                weiyu: `【微语】${DATA.tip || ''}`
+                weiyu: `【微语】${DATA.tip || '暂无微语'}`
             };
 
             // 加载图片资源
@@ -158,9 +161,9 @@
             document.getElementById('img-result').src = window.IMAGE_BASE64;
         }
 
-        // 执行生成
+        // 执行生成并捕获错误
         generate().catch(err => {
-            console.error('生成失败:', err);
+            console.error('图片生成失败:', err);
             window.IMAGE_ERROR = err.message;
         });
     </script>
