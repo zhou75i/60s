@@ -82,7 +82,7 @@ async function update60s() {
 }
 
 /**
- * 生成图片（优化渲染+截图调试）
+ * 生成图片（适配新的generate逻辑）
  */
 async function generateImage(data) {
   let browser;
@@ -95,21 +95,21 @@ async function generateImage(data) {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--allow-file-access-from-files',
-        '--disable-web-security', // 关闭跨域限制（解决图片加载问题）
+        '--disable-web-security', // 关闭跨域限制（关键：加载GitHub图片）
         '--disable-features=IsolateOrigins,site-per-process'
       ],
       headless: 'new',
       defaultViewport: { 
-        width: 800,  // 与Canvas宽度一致
-        height: 2000,
-        deviceScaleFactor: 2 // 提高渲染分辨率
+        width: 1080,  // 适配Banner图片宽度
+        height: 6000,
+        deviceScaleFactor: 2 // 提高分辨率
       },
       timeout: 60000
     });
 
     const page = await browser.newPage();
 
-    // 捕获页面日志（便于调试）
+    // 捕获页面日志（调试用）
     page.on('console', msg => {
       const type = msg.type();
       const text = msg.text();
@@ -136,39 +136,34 @@ async function generateImage(data) {
       window.DATA = injectData;
     }, data);
 
-    // 触发绘制（等待异步完成）
+    // 触发绘制（等待异步完成：字体加载+图片加载）
     console.log('触发页面绘制...');
     await page.evaluate(async () => {
       if (typeof generate === 'function') {
-        await generate();
+        await generate(); // 等待异步绘制完成
       } else {
         throw new Error('页面未找到generate函数');
       }
     });
 
-    // 调试：截取页面全屏截图（本地运行时可查看）
-    // await page.screenshot({ path: 'debug-page.png', fullPage: true });
-
-    // 等待图片生成（延长超时+增加调试）
+    // 等待图片生成（延长超时，适配字体+图片加载）
     console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
     }, { 
-      timeout: 120000,
+      timeout: 180000, // 延长到3分钟
       polling: 1000
     });
 
-    // 获取Canvas尺寸和内容调试信息
+    // 调试信息
     const canvasInfo = await page.evaluate(() => {
-      const canvas = document.getElementById('canvas');
       return {
-        width: canvas.width,
-        height: canvas.height,
-        dataLength: window.IMAGE_BASE64.length
+        base64Length: window.IMAGE_BASE64.length,
+        error: window.IMAGE_ERROR || '无'
       };
     });
-    console.log(`图片生成完成，Canvas信息：`, canvasInfo);
+    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}`);
 
     return imageBase64.jsonValue();
 
