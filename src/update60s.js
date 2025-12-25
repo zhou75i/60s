@@ -89,51 +89,42 @@ async function update60s() {
 }
 
 /**
- * 生成图片（无头浏览器运行template.html）
+ * 生成图片（修复：注入数据后再触发绘制）
  */
 async function generateImage(data) {
   let browser;
   try {
     console.log('启动无头浏览器...');
-    // 启动无头浏览器（增加日志、调整参数）
     browser = await puppeteer.launch({
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-images', // 禁用图片加载（加速渲染）
-        '--disable-extensions',
-        '--disable-font-subpixel-positioning'
+        '--disable-gpu'
       ],
       headless: 'new',
-      defaultViewport: { width: 800, height: 2000 }, // 固定视口尺寸
-      timeout: 30000 // 浏览器启动超时30秒
+      defaultViewport: { width: 1000, height: 3500 },
+      timeout: 30000
     });
 
     console.log('打开template.html页面...');
     const page = await browser.newPage();
 
-    // 捕获页面内的控制台日志
-    page.on('console', msg => {
-      console.log(`[页面日志] ${msg.text()}`);
-    });
-
-    // 修复：正确捕获页面错误并传递到浏览器端
+    // 捕获页面日志/错误
+    page.on('console', msg => console.log(`[页面日志] ${msg.text()}`));
     page.on('pageerror', async (err) => {
       console.error(`[页面错误] ${err.message}`);
-      // 向浏览器页面注入错误信息（浏览器端可访问 window）
       await page.evaluate((errorMsg) => {
         window.IMAGE_ERROR = errorMsg;
       }, err.message);
     });
 
-    // 加载本地template.html
+    // 加载页面（不等待绘制，先加载空页面）
     const templatePath = path.resolve(process.cwd(), 'src/template.html');
     console.log(`加载模板文件：${templatePath}`);
     await page.goto(`file://${templatePath}`, { 
       waitUntil: 'domcontentloaded',
-      timeout: 30000 // 页面加载超时30秒
+      timeout: 30000
     });
 
     // 注入数据到页面
@@ -142,18 +133,27 @@ async function generateImage(data) {
       window.DATA = injectData;
     }, data);
 
-    // 精准等待图片生成（每500ms检测一次，超时90秒）
+    // 关键：注入数据后，手动触发页面绘制函数
+    console.log('触发页面绘制...');
+    await page.evaluate(() => {
+      if (typeof draw60sContent === 'function') {
+        draw60sContent(); // 重新执行绘制，使用注入的DATA
+      } else {
+        throw new Error('页面未找到draw60sContent函数');
+      }
+    });
+
+    // 等待图片生成
     console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
-      // 优先检测错误，再检测成功
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
     }, { 
       timeout: 90000,
-      polling: 500 // 每500ms检测一次
+      polling: 500
     });
 
-    console.log('图片生成完成，获取Base64...');
+    console.log(`图片生成完成，尺寸：${await page.evaluate(() => `${canvas.width}x${canvas.height}`)}`);
     return imageBase64.jsonValue();
 
   } catch (err) {
