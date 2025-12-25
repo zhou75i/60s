@@ -1,17 +1,15 @@
-// 移除所有 storage/TypeScript 相关导入
 import puppeteer from 'puppeteer';
 import { Octokit } from '@octokit/rest';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 
-// 加载环境变量
 dotenv.config();
 
-// 初始化GitHub API客户端
+// 初始化GitHub客户端
 const octokit = new Octokit({ auth: process.env.GH_TOKEN });
 
-// GitHub仓库配置
+// GitHub配置
 const REPO_CONFIG = {
   owner: process.env.REPO_OWNER,
   repo: process.env.REPO_NAME,
@@ -19,7 +17,7 @@ const REPO_CONFIG = {
   path: 'static/images/'
 };
 
-// 目标API地址
+// API地址
 const API_URL = 'https://60s.viki.moe/v2/60s';
 
 // 校验环境变量
@@ -30,10 +28,7 @@ if (!process.env.GH_TOKEN || !REPO_CONFIG.owner || !REPO_CONFIG.repo) {
 
 // 入口函数
 async function update60s() {
-  // 无需处理inputDate，直接获取API当日数据
-  console.log('开始从API获取60s数据...');
-
-  // 从API获取数据（封装为函数，增加重试）
+  // 获取API数据（带重试）
   async function fetch60sData() {
     let retries = 3;
     while (retries > 0) {
@@ -53,7 +48,6 @@ async function update60s() {
         if (!response.ok) throw new Error(`API请求失败：${response.status} ${response.statusText}`);
         const apiData = await response.json();
         
-        // 校验核心数据
         if (!apiData.data || !apiData.data.date || !Array.isArray(apiData.data.news)) {
           throw new Error('API返回数据结构异常，缺少date/news字段');
         }
@@ -67,13 +61,12 @@ async function update60s() {
     }
   }
 
-  // 核心逻辑：获取API数据 → 生成图片 → 上传GitHub
   try {
     // 1. 获取API数据
     const apiData = await fetch60sData();
     console.log(`成功获取${apiData.date}的60s数据，共${apiData.news.length}条新闻`);
 
-    // 2. 生成图片（无头浏览器）
+    // 2. 生成图片
     const imageBase64 = await generateImage(apiData);
     const imageBuffer = Buffer.from(imageBase64.split(',')[1], 'base64');
     const fileName = `${apiData.date}.png`;
@@ -89,7 +82,7 @@ async function update60s() {
 }
 
 /**
- * 生成图片（修复：注入数据后再触发绘制）
+ * 生成图片（优化渲染+截图调试）
  */
 async function generateImage(data) {
   let browser;
@@ -101,26 +94,35 @@ async function generateImage(data) {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--allow-file-access-from-files' // 允许本地文件加载远程图片
+        '--allow-file-access-from-files',
+        '--disable-web-security', // 关闭跨域限制（解决图片加载问题）
+        '--disable-features=IsolateOrigins,site-per-process'
       ],
       headless: 'new',
-      defaultViewport: { width: 1000, height: 3500 },
-      timeout: 30000
+      defaultViewport: { 
+        width: 800,  // 与Canvas宽度一致
+        height: 2000,
+        deviceScaleFactor: 2 // 提高渲染分辨率
+      },
+      timeout: 60000
     });
 
-    console.log('打开template.html页面...');
     const page = await browser.newPage();
 
-    // 捕获页面日志/错误
-    page.on('console', msg => console.log(`[页面日志] ${msg.text()}`));
-    page.on('pageerror', async (err) => {
+    // 捕获页面日志（便于调试）
+    page.on('console', msg => {
+      const type = msg.type();
+      const text = msg.text();
+      console.log(`[页面${type}] ${text}`);
+    });
+    page.on('pageerror', (err) => {
       console.error(`[页面错误] ${err.message}`);
-      await page.evaluate((errorMsg) => {
+      page.evaluate((errorMsg) => {
         window.IMAGE_ERROR = errorMsg;
       }, err.message);
     });
 
-    // 加载页面（不等待绘制，先加载空页面）
+    // 加载模板页面
     const templatePath = path.resolve(process.cwd(), 'src/template.html');
     console.log(`加载模板文件：${templatePath}`);
     await page.goto(`file://${templatePath}`, { 
@@ -128,33 +130,46 @@ async function generateImage(data) {
       timeout: 30000
     });
 
-    // 注入数据到页面
+    // 注入数据
     console.log('注入数据到页面...');
     await page.evaluate((injectData) => {
       window.DATA = injectData;
     }, data);
 
-    // 关键修复：调用正确的函数名 generate() 而非 draw60sContent()
+    // 触发绘制（等待异步完成）
     console.log('触发页面绘制...');
     await page.evaluate(async () => {
       if (typeof generate === 'function') {
-        await generate(); // 等待异步绘制完成（图片加载是异步的）
+        await generate();
       } else {
         throw new Error('页面未找到generate函数');
       }
     });
 
-    // 等待图片生成（增加超时时间，适配图片加载）
+    // 调试：截取页面全屏截图（本地运行时可查看）
+    // await page.screenshot({ path: 'debug-page.png', fullPage: true });
+
+    // 等待图片生成（延长超时+增加调试）
     console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
     }, { 
-      timeout: 120000, // 延长超时到2分钟，适配图片加载
+      timeout: 120000,
       polling: 1000
     });
 
-    console.log(`图片生成完成，尺寸：${await page.evaluate(() => `${canvas.width}x${canvas.height}`)}`);
+    // 获取Canvas尺寸和内容调试信息
+    const canvasInfo = await page.evaluate(() => {
+      const canvas = document.getElementById('canvas');
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        dataLength: window.IMAGE_BASE64.length
+      };
+    });
+    console.log(`图片生成完成，Canvas信息：`, canvasInfo);
+
     return imageBase64.jsonValue();
 
   } catch (err) {
@@ -168,19 +183,19 @@ async function generateImage(data) {
 }
 
 /**
- * 上传图片到GitHub仓库
+ * 上传图片到GitHub
  */
 async function uploadToGitHub(fileName, fileBuffer) {
   const filePath = `${REPO_CONFIG.path}${fileName}`;
 
   try {
-    // 先检查文件是否存在（获取sha）
+    // 检查文件是否存在
     const existingFile = await octokit.rest.repos.getContent({
       owner: REPO_CONFIG.owner,
       repo: REPO_CONFIG.repo,
       path: filePath,
       ref: REPO_CONFIG.branch
-    }).catch(() => null); // 不存在则返回null
+    }).catch(() => null);
 
     // 上传/更新文件
     await octokit.rest.repos.createOrUpdateFileContents({
@@ -190,12 +205,12 @@ async function uploadToGitHub(fileName, fileBuffer) {
       message: `Auto update 60s image: ${fileName}`,
       content: fileBuffer.toString('base64'),
       branch: REPO_CONFIG.branch,
-      ...(existingFile ? { sha: existingFile.data.sha } : {}) // 存在则更新，不存在则创建
+      ...(existingFile ? { sha: existingFile.data.sha } : {})
     });
   } catch (err) {
     throw new Error(`上传GitHub失败：${err.message}`);
   }
 }
 
-// 执行入口函数
+// 执行入口
 update60s();
