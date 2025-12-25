@@ -16,7 +16,6 @@
     <img id="img-result" alt="60s读懂世界" />
 
     <script>
-        let DATA = window.DATA || {};
         let customFont = null;
         const CONFIG = {
             bannerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/1.png',
@@ -139,26 +138,37 @@
         }
 
         /**
-         * 核心生成逻辑（强化DATA校验+防崩溃）
+         * 核心生成逻辑（全程使用window.DATA，解决作用域问题）
          */
         async function generate() {
             try {
-                // 关键：先校验DATA核心字段，避免后续报错
+                // 关键：直接读取全局window.DATA，而非局部变量
+                const DATA = window.DATA;
+                
+                // 强制校验DATA核心字段，避免后续报错
                 if (!DATA || typeof DATA !== 'object') {
-                    throw new Error('DATA对象未正确注入');
+                    throw new Error('window.DATA对象未正确注入');
                 }
                 if (!DATA.date) {
-                    throw new Error('DATA.date为空，无法绘制日期');
+                    throw new Error(`window.DATA.date为空，当前值：${JSON.stringify(DATA.date)}`);
                 }
                 if (!Array.isArray(DATA.news)) {
-                    throw new Error('DATA.news不是数组');
+                    throw new Error(`window.DATA.news不是数组，当前值：${JSON.stringify(DATA.news)}`);
                 }
                 if (!DATA.tip) {
-                    throw new Error('DATA.tip为空');
+                    throw new Error(`window.DATA.tip为空，当前值：${JSON.stringify(DATA.tip)}`);
                 }
                 if (!DATA.lunar_date) {
-                    throw new Error('DATA.lunar_date为空');
+                    throw new Error(`window.DATA.lunar_date为空，当前值：${JSON.stringify(DATA.lunar_date)}`);
                 }
+
+                // 打印全局DATA，确认数据
+                console.log('generate函数读取的window.DATA：', {
+                    date: DATA.date,
+                    newsCount: DATA.news.length,
+                    lunar_date: DATA.lunar_date,
+                    tip: DATA.tip
+                });
 
                 // 1. 加载字体（必须等待完成）
                 await loadCustomFont();
