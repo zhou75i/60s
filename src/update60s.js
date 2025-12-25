@@ -28,7 +28,7 @@ if (!process.env.GH_TOKEN || !REPO_CONFIG.owner || !REPO_CONFIG.repo) {
 
 // 入口函数
 async function update60s() {
-  // 获取API数据（带重试）
+  // 获取API数据（带重试+详细日志）
   async function fetch60sData() {
     let retries = 3;
     while (retries > 0) {
@@ -48,10 +48,24 @@ async function update60s() {
         if (!response.ok) throw new Error(`API请求失败：${response.status} ${response.statusText}`);
         const apiData = await response.json();
         
-        if (!apiData.data || !apiData.data.date || !Array.isArray(apiData.data.news)) {
-          throw new Error('API返回数据结构异常，缺少date/news字段');
+        // 强制序列化+反序列化，排除不可序列化内容
+        const cleanData = JSON.parse(JSON.stringify(apiData.data));
+        
+        // 校验并修复核心数据（关键：确保news是数组）
+        if (!cleanData) throw new Error('API返回data为空');
+        if (!cleanData.date) cleanData.date = new Date().toISOString().split('T')[0];
+        cleanData.news = Array.isArray(cleanData.news) ? cleanData.news : [];
+        cleanData.lunar_date = cleanData.lunar_date || '未知';
+        cleanData.tip = cleanData.tip || '暂无微语';
+
+        // 打印API原始数据（调试用）
+        console.log('API返回的cleanData：', JSON.stringify(cleanData, null, 2));
+        console.log(`✅ API数据校验完成：日期=${cleanData.date}，新闻数=${cleanData.news.length}，微语=${cleanData.tip}`);
+
+        if (cleanData.news.length === 0 && retries > 0) {
+          throw new Error('API返回news为空，重试...');
         }
-        return apiData.data;
+        return cleanData;
       } catch (err) {
         retries--;
         if (retries === 0) throw err;
@@ -82,7 +96,7 @@ async function update60s() {
 }
 
 /**
- * 生成图片（适配新的generate逻辑）
+ * 生成图片（核心：修复数据注入+详细调试）
  */
 async function generateImage(data) {
   let browser;
@@ -95,21 +109,21 @@ async function generateImage(data) {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--allow-file-access-from-files',
-        '--disable-web-security', // 关闭跨域限制（关键：加载GitHub图片）
+        '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process'
       ],
       headless: 'new',
       defaultViewport: { 
-        width: 1080,  // 适配Banner图片宽度
+        width: 1080,
         height: 6000,
-        deviceScaleFactor: 2 // 提高分辨率
+        deviceScaleFactor: 2
       },
       timeout: 60000
     });
 
     const page = await browser.newPage();
 
-    // 捕获页面日志（调试用）
+    // 捕获页面所有日志
     page.on('console', msg => {
       const type = msg.type();
       const text = msg.text();
@@ -130,29 +144,35 @@ async function generateImage(data) {
       timeout: 30000
     });
 
-    // 注入数据
-    console.log('注入数据到页面...');
-    await page.evaluate((injectData) => {
-      window.DATA = injectData;
-    }, data);
+    // 强制序列化数据（避免Puppeteer注入异常）
+    const injectDataStr = JSON.stringify(data);
+    console.log('准备注入页面的数据：', injectDataStr);
 
-    // 触发绘制（等待异步完成：字体加载+图片加载）
+    // 注入数据（分两步：先传字符串，再解析，避免直接传对象丢失）
+    console.log('注入数据到页面...');
+    await page.evaluate((dataStr) => {
+      window.DATA_RAW = dataStr;
+      window.DATA = JSON.parse(dataStr); // 页面内解析，确保结构完整
+      console.log('页面接收的DATA：', JSON.stringify(window.DATA, null, 2));
+    }, injectDataStr);
+
+    // 触发绘制（等待异步完成）
     console.log('触发页面绘制...');
     await page.evaluate(async () => {
       if (typeof generate === 'function') {
-        await generate(); // 等待异步绘制完成
+        await generate();
       } else {
         throw new Error('页面未找到generate函数');
       }
     });
 
-    // 等待图片生成（延长超时，适配字体+图片加载）
+    // 等待图片生成
     console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
     }, { 
-      timeout: 180000, // 延长到3分钟
+      timeout: 180000,
       polling: 1000
     });
 
@@ -160,10 +180,11 @@ async function generateImage(data) {
     const canvasInfo = await page.evaluate(() => {
       return {
         base64Length: window.IMAGE_BASE64.length,
+        dataNewsLength: window.DATA.news.length,
         error: window.IMAGE_ERROR || '无'
       };
     });
-    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}`);
+    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}，页面内新闻数：${canvasInfo.dataNewsLength}`);
 
     return imageBase64.jsonValue();
 
