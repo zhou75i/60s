@@ -30,7 +30,9 @@
                 lineHeight: 1.8
             },
             padding: { left: 50, right: 50 },
-            clipExtra: 50 // 减少裁剪余量，仅保留基础间距
+            clipExtra: 20, // 裁剪余量改回20，精准贴合
+            newsInnerLineReduce: 5, // 单条新闻内部行间距缩短5px
+            newsBetweenAdd: 5 // 不同新闻之间行间距增加5px
         };
 
         /**
@@ -97,7 +99,7 @@
          * 绘制白色背景
          */
         function drawWhiteBackground(ctx, width, height) {
-            ctx.fillStyle = '#ffffff';
+            ctx.fillStyle = '#ffffff'; // 纯白背景，无灰色
             ctx.fillRect(0, 0, width, height);
         }
 
@@ -154,7 +156,7 @@
                 canvas.width = canvasW;
                 canvas.height = canvasH;
 
-                // 4. 绘制白色背景（纯白，无灰色底）
+                // 4. 绘制白色背景
                 drawWhiteBackground(ctx, canvasW, canvasH);
 
                 // 5. 绘制Banner图片
@@ -170,10 +172,11 @@
                 ctx.fillText(formatDateStr, canvasW / 2, CONFIG.dateY);
                 console.log('日期绘制完成：', formatDateStr);
 
-                // 7. 绘制新闻列表（移除灰色底，修复截断）
+                // 7. 绘制新闻列表（核心调整行间距）
                 let currentY = CONFIG.newsStartY + 20; // 避开Banner的间距
                 const newsMaxW = canvasW - CONFIG.padding.left - CONFIG.padding.right;
-                const newsLineHeight = CONFIG.font.news.size * CONFIG.font.lineHeight * 1.2;
+                // 单条新闻内部行高 = 原计算值 - 缩短的5px
+                const newsInnerLineHeight = (CONFIG.font.news.size * CONFIG.font.lineHeight * 1.2) - CONFIG.newsInnerLineReduce;
                 
                 // 设置新闻字体样式
                 ctx.font = `${CONFIG.font.news.size}px ${CONFIG.font.news.family}`;
@@ -181,16 +184,21 @@
                 ctx.textBaseline = 'top';
                 ctx.textAlign = 'left';
 
-                // 逐行绘制新闻（确保所有15条都显示）
+                // 逐行绘制新闻（调整行间距）
                 DATA.news.forEach((news, index) => {
                     const text = `${index + 1}、${news.trim()}`;
-                    const { lines } = textWrap(ctx, text, newsMaxW, newsLineHeight);
+                    const { lines } = textWrap(ctx, text, newsMaxW, newsInnerLineHeight);
                     
-                    // 绘制单条新闻的所有行
+                    // 绘制单条新闻的所有行（内部行间距缩短5px）
                     lines.forEach(line => {
                         ctx.fillText(line, CONFIG.padding.left, currentY);
-                        currentY += newsLineHeight;
+                        currentY += newsInnerLineHeight;
                     });
+                    
+                    // 不同新闻之间增加5px间距（最后一条新闻不加）
+                    if (index < DATA.news.length - 1) {
+                        currentY += CONFIG.newsBetweenAdd;
+                    }
                 });
                 console.log('新闻绘制完成，共', DATA.news.length, '条，最终Y坐标：', currentY);
 
@@ -216,8 +224,7 @@
                 });
                 console.log('微语绘制完成：', weiyuText, '最终Y坐标：', currentY);
 
-                // 9. 裁剪画布（核心修复：包含Footer高度，避免截断）
-                // 最终裁剪高度 = 微语结束坐标 + 裁剪余量 + Footer高度
+                // 9. 裁剪画布（精准裁剪，余量仅20）
                 const finalContentHeight = currentY + CONFIG.clipExtra;
                 const clipHeight = finalContentHeight + footerImg.height; 
                 const clipCanvas = document.createElement('canvas');
@@ -225,12 +232,12 @@
                 clipCanvas.height = clipHeight;
                 const clipCtx = clipCanvas.getContext('2d');
                 
-                // 裁剪画布绘制纯白背景（无灰色）
+                // 裁剪画布绘制纯白背景
                 drawWhiteBackground(clipCtx, canvasW, clipHeight);
-                // 复制主画布内容到裁剪画布（包含所有新闻/微语）
+                // 复制主画布内容到裁剪画布
                 clipCtx.drawImage(canvas, 0, 0, canvasW, finalContentHeight, 0, 0, canvasW, finalContentHeight);
 
-                // 10. 绘制Footer图片（放在内容下方，不覆盖新闻）
+                // 10. 绘制Footer图片（内容下方，不遮挡）
                 clipCtx.drawImage(footerImg, 0, finalContentHeight);
 
                 // 11. 生成Base64
