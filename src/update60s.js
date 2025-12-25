@@ -11,14 +11,21 @@ const octokit = new Octokit({ auth: process.env.GH_TOKEN });
 
 // GitHub配置
 const REPO_CONFIG = {
-    owner: process.env.REPO_OWNER,
-    repo: process.env.REPO_NAME,
+    owner: process.env.REPO_OWNER, 
+    repo: process.env.REPO_NAME, 
     branch: process.env.BRANCH || 'main',
-    path: 'static/images/'
+    imgPath: 'static/images/',
+    jsonPath: 'static/60s/' // JSON文件存储路径
 };
 
 // API地址
 const API_URL = 'https://60s.viki.moe/v2/60s';
+
+// 自定义配置（JSON专用）
+const JSON_CONFIG = {
+    source: 'https://60s-static.viki.moe/', 
+    imageRepoPrefix: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/static/images/' 
+};
 
 // 校验环境变量
 if (!process.env.GH_TOKEN || !REPO_CONFIG.owner || !REPO_CONFIG.repo) {
@@ -28,7 +35,6 @@ if (!process.env.GH_TOKEN || !REPO_CONFIG.owner || !REPO_CONFIG.repo) {
 
 // 入口函数
 async function update60s() {
-    // 获取API数据（带重试）
     async function fetch60sData() {
         let retries = 3;
         while (retries > 0) {
@@ -48,7 +54,6 @@ async function update60s() {
                 const apiData = await response.json();
                 const cleanData = JSON.parse(JSON.stringify(apiData.data));
                 
-                // 强制校验核心字段
                 const requiredFields = ['date', 'news', 'lunar_date', 'tip'];
                 const missingFields = requiredFields.filter(field => !cleanData[field]);
                 if (missingFields.length > 0) {
@@ -69,23 +74,90 @@ async function update60s() {
         }
     }
 
+    // 处理API数据为目标JSON格式
+    function processJsonData(rawData) {
+        // 1. 复制原始数据，排除cover字段
+        const processedData = { ...rawData };
+        delete processedData.cover; 
+        
+        // 2. 修改image链接
+        if (processedData.image) {
+            const date = processedData.date;
+            processedData.image = `${JSON_CONFIG.imageRepoPrefix}${date}.png`;
+        }
+        
+        // 3. 添加source字段
+        processedData.source = JSON_CONFIG.source;
+
+        return processedData;
+    }
+
     try {
         // 1. 获取API数据
         const apiData = await fetch60sData();
         console.log(`成功获取${apiData.date}的60s数据，共${apiData.news.length}条新闻`);
 
-        // 2. 生成图片
+        // 2. 处理JSON数据
+        const jsonData = processJsonData(apiData);
+        const jsonFileName = `${apiData.date}.json`;
+        const jsonContent = JSON.stringify(jsonData, null, 2); // 格式化JSON，缩进2空格
+        console.log(`✅ JSON数据处理完成`);
+
+        // 3. 上传JSON文件到GitHub
+        await uploadToGitHub(REPO_CONFIG.jsonPath + jsonFileName, jsonContent, 'utf8');
+        console.log(`✅ 成功上传JSON文件到GitHub：${REPO_CONFIG.jsonPath}${jsonFileName}`);
+
+        // 4. 生成图片
         const imageBase64 = await generateImage(apiData);
         const imageBuffer = Buffer.from(imageBase64.split(',')[1], 'base64');
-        const fileName = `${apiData.date}.png`;
+        const imgFileName = `${apiData.date}.png`;
 
-        // 3. 上传到GitHub（自动覆盖已有文件）
-        await uploadToGitHub(fileName, imageBuffer);
-        console.log(`✅ 成功上传（覆盖）图片到GitHub：${REPO_CONFIG.path}${fileName}`);
+        // 5. 上传图片到GitHub（自动覆盖已有文件）
+        await uploadToGitHub(REPO_CONFIG.imgPath + imgFileName, imageBuffer);
+        console.log(`✅ 成功上传（覆盖）图片到GitHub：${REPO_CONFIG.imgPath}${imgFileName}`);
 
     } catch (err) {
         console.error('❌ 执行失败：', err.message);
         process.exit(1);
+    }
+}
+
+/**
+ * 通用上传函数（支持图片/JSON）
+ * @param {string} filePath GitHub上的目标路径
+ * @param {string|Buffer} content 要上传的内容（JSON字符串/图片Buffer）
+ * @param {string} encoding 编码（JSON用utf8，图片用base64）
+ */
+async function uploadToGitHub(filePath, content, encoding = 'base64') {
+    try {
+        // 检查文件是否存在
+        const existingFile = await octokit.rest.repos.getContent({
+            owner: REPO_CONFIG.owner,
+            repo: REPO_CONFIG.repo,
+            path: filePath,
+            ref: REPO_CONFIG.branch
+        }).catch(() => null);
+
+        // 处理内容编码
+        let contentBase64;
+        if (Buffer.isBuffer(content)) {
+            contentBase64 = content.toString('base64');
+        } else {
+            contentBase64 = Buffer.from(content, encoding).toString('base64');
+        }
+
+        // 上传/覆盖文件
+        await octokit.rest.repos.createOrUpdateFileContents({
+            owner: REPO_CONFIG.owner,
+            repo: REPO_CONFIG.repo,
+            path: filePath,
+            message: `Auto update 60s ${filePath.split('.').pop()} file: ${path.basename(filePath)}`,
+            content: contentBase64,
+            branch: REPO_CONFIG.branch,
+            sha: existingFile?.data?.sha
+        });
+    } catch (err) {
+        throw new Error(`上传GitHub失败[${filePath}]：${err.message}`);
     }
 }
 
@@ -188,36 +260,6 @@ async function generateImage(data) {
         throw new Error(`图片生成失败：${err.message}`);
     } finally {
         if (browser) await browser.close();
-    }
-}
-
-/**
- * 上传图片到GitHub
- */
-async function uploadToGitHub(fileName, fileBuffer) {
-    const filePath = `${REPO_CONFIG.path}${fileName}`;
-
-    try {
-        // 检查文件是否存在
-        const existingFile = await octokit.rest.repos.getContent({
-            owner: REPO_CONFIG.owner,
-            repo: REPO_CONFIG.repo,
-            path: filePath,
-            ref: REPO_CONFIG.branch
-        }).catch(() => null);
-
-        // 上传/覆盖文件
-        await octokit.rest.repos.createOrUpdateFileContents({
-            owner: REPO_CONFIG.owner,
-            repo: REPO_CONFIG.repo,
-            path: filePath,
-            message: `Auto update 60s image: ${fileName}`,
-            content: fileBuffer.toString('base64'),
-            branch: REPO_CONFIG.branch,
-            sha: existingFile?.data?.sha
-        });
-    } catch (err) {
-        throw new Error(`上传GitHub失败：${err.message}`);
     }
 }
 
