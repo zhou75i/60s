@@ -48,11 +48,15 @@ async function update60s() {
         const apiData = await response.json();
         const cleanData = JSON.parse(JSON.stringify(apiData.data));
         
-        // 仅保留核心必要数据（移除兜底）
-        cleanData.date = cleanData.date;
-        cleanData.news = cleanData.news;
-        cleanData.lunar_date = cleanData.lunar_date;
-        cleanData.tip = cleanData.tip;
+        // 强制校验核心字段，缺失则直接报错
+        const requiredFields = ['date', 'news', 'lunar_date', 'tip'];
+        const missingFields = requiredFields.filter(field => !cleanData[field]);
+        if (missingFields.length > 0) {
+          throw new Error(`API返回数据缺失核心字段：${missingFields.join(', ')}`);
+        }
+        if (!Array.isArray(cleanData.news)) {
+          throw new Error('API返回的news不是数组');
+        }
 
         console.log(`✅ API数据校验完成：日期=${cleanData.date}，新闻数=${cleanData.news.length}`);
         return cleanData;
@@ -86,7 +90,7 @@ async function update60s() {
 }
 
 /**
- * 生成图片（强化字体加载等待）
+ * 生成图片（强化数据注入+错误捕获）
  */
 async function generateImage(data) {
   let browser;
@@ -113,21 +117,47 @@ async function generateImage(data) {
     const page = await browser.newPage();
 
     // 捕获页面日志
-    page.on('console', msg => console.log(`[页面${msg.type()}] ${msg.text()}`));
+    page.on('console', msg => {
+      const type = msg.type();
+      const text = msg.text();
+      console.log(`[页面${type}] ${text}`);
+    });
     page.on('pageerror', (err) => {
-      console.error(`[页面错误] ${err.message}`);
-      page.evaluate((errorMsg) => window.IMAGE_ERROR = errorMsg, err.message);
+      console.error(`[页面错误] ${err.message}\n${err.stack}`);
+      page.evaluate((errorMsg) => {
+        window.IMAGE_ERROR = errorMsg;
+      }, err.message);
     });
 
     // 加载模板
     const templatePath = path.resolve(process.cwd(), 'src/template.html');
     await page.goto(`file://${templatePath}`, { waitUntil: 'domcontentloaded' });
 
-    // 注入数据
+    // 强制校验注入数据（避免空数据）
+    if (!data || !data.date) {
+      throw new Error('注入数据缺失date字段');
+    }
     const injectDataStr = JSON.stringify(data);
+    console.log('注入页面的核心数据：', {
+      date: data.date,
+      newsCount: data.news.length,
+      lunar_date: data.lunar_date,
+      tip: data.tip
+    });
+
+    // 注入数据（确保同步完成）
     await page.evaluate((dataStr) => {
-      window.DATA = JSON.parse(dataStr);
+      try {
+        window.DATA = JSON.parse(dataStr);
+        console.log('页面DATA注入成功，date=', window.DATA.date);
+      } catch (err) {
+        console.error('页面解析注入数据失败：', err.message);
+        throw err;
+      }
     }, injectDataStr);
+
+    // 等待1秒确保数据完全注入，再触发绘制
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // 触发绘制并等待完成
     await page.evaluate(async () => {
@@ -146,10 +176,11 @@ async function generateImage(data) {
 
     // 调试信息
     const canvasInfo = await page.evaluate(() => ({
-      base64Length: window.IMAGE_BASE64.length,
-      dataNewsLength: window.DATA.news.length
+      base64Length: window.IMAGE_BASE64?.length || 0,
+      dataNewsLength: window.DATA?.news?.length || 0,
+      dataDate: window.DATA?.date || '无'
     }));
-    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}`);
+    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}，页面date：${canvasInfo.dataDate}`);
 
     return imageBase64.jsonValue();
 
