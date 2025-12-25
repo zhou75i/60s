@@ -90,7 +90,7 @@ async function update60s() {
 }
 
 /**
- * 生成图片（强化数据注入+错误捕获）
+ * 生成图片（简化数据注入，直接赋值window.DATA）
  */
 async function generateImage(data) {
   let browser;
@@ -137,27 +137,27 @@ async function generateImage(data) {
     if (!data || !data.date) {
       throw new Error('注入数据缺失date字段');
     }
-    const injectDataStr = JSON.stringify(data);
-    console.log('注入页面的核心数据：', {
+    console.log('准备注入页面的核心数据：', {
       date: data.date,
       newsCount: data.news.length,
       lunar_date: data.lunar_date,
       tip: data.tip
     });
 
-    // 注入数据（确保同步完成）
-    await page.evaluate((dataStr) => {
+    // 核心修复：直接赋值window.DATA，无需JSON序列化/反序列化，避免解析错误
+    await page.evaluate((injectData) => {
       try {
-        window.DATA = JSON.parse(dataStr);
-        console.log('页面DATA注入成功，date=', window.DATA.date);
+        window.DATA = injectData;
+        console.log('页面window.DATA注入成功，date=', window.DATA.date);
+        console.log('注入后window.DATA完整数据：', JSON.stringify(window.DATA, null, 2));
       } catch (err) {
-        console.error('页面解析注入数据失败：', err.message);
+        console.error('页面赋值window.DATA失败：', err.message);
         throw err;
       }
-    }, injectDataStr);
+    }, data); // 直接传对象，Puppeteer会自动序列化
 
-    // 等待1秒确保数据完全注入，再触发绘制
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // 等待2秒确保数据完全挂载到window，再触发绘制
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     // 触发绘制并等待完成
     await page.evaluate(async () => {
