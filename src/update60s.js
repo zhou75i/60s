@@ -37,29 +37,29 @@ async function update60s() {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://60s.viki.moe/',
-            'Accept': 'application/json, text/plain, */*',
             'Cache-Control': 'no-cache'
           },
           timeout: 10000
         });
 
-        if (!response.ok) throw new Error(`API请求失败：${response.status} ${response.statusText}`);
+        if (!response.ok) throw new Error(`API请求失败：${response.status}`);
         const apiData = await response.json();
         const cleanData = JSON.parse(JSON.stringify(apiData.data));
         
-        // 数据兜底
-        cleanData.date = cleanData.date || new Date().toISOString().split('T')[0];
-        cleanData.lunar_date = cleanData.lunar_date || '未知';
-        cleanData.news = Array.isArray(cleanData.news) ? cleanData.news.filter(n => n && n.trim()) : [];
-        cleanData.tip = cleanData.tip || '暂无微语';
+        // 仅保留核心必要数据（移除兜底）
+        cleanData.date = cleanData.date;
+        cleanData.news = cleanData.news;
+        cleanData.lunar_date = cleanData.lunar_date;
+        cleanData.tip = cleanData.tip;
 
+        console.log(`✅ API数据校验完成：日期=${cleanData.date}，新闻数=${cleanData.news.length}`);
         return cleanData;
       } catch (err) {
         retries--;
         if (retries === 0) throw err;
-        console.log(`API重试(${3 - retries}/3)：`, err.message);
+        console.log(`API请求失败，重试(${3 - retries}/3)...`, err.message);
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
@@ -68,16 +68,16 @@ async function update60s() {
   try {
     // 1. 获取API数据
     const apiData = await fetch60sData();
-    console.log(`✅ 获取数据：${apiData.date}，新闻数=${apiData.news.length}`);
+    console.log(`成功获取${apiData.date}的60s数据，共${apiData.news.length}条新闻`);
 
     // 2. 生成图片
     const imageBase64 = await generateImage(apiData);
     const imageBuffer = Buffer.from(imageBase64.split(',')[1], 'base64');
     const fileName = `${apiData.date}.png`;
 
-    // 3. 上传到GitHub
+    // 3. 上传到GitHub（自动覆盖已有文件）
     await uploadToGitHub(fileName, imageBuffer);
-    console.log(`✅ 上传成功：${REPO_CONFIG.path}${fileName}`);
+    console.log(`✅ 成功上传（覆盖）图片到GitHub：${REPO_CONFIG.path}${fileName}`);
 
   } catch (err) {
     console.error('❌ 执行失败：', err.message);
@@ -86,7 +86,7 @@ async function update60s() {
 }
 
 /**
- * 生成图片（增加页面截图调试）
+ * 生成图片（强化字体加载等待）
  */
 async function generateImage(data) {
   let browser;
@@ -99,47 +99,57 @@ async function generateImage(data) {
         '--disable-gpu',
         '--allow-file-access-from-files',
         '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--font-render-hinting=full' // 强制字体渲染
+        '--disable-features=IsolateOrigins,site-per-process'
       ],
       headless: 'new',
       defaultViewport: { 
-        width: 1000,  // 适配Banner宽度
-        height: 3000,
-        deviceScaleFactor: 2 // 高清渲染
+        width: 1080,
+        height: 6000,
+        deviceScaleFactor: 2
       },
-      timeout: 120000
+      timeout: 60000
     });
 
     const page = await browser.newPage();
 
     // 捕获页面日志
     page.on('console', msg => console.log(`[页面${msg.type()}] ${msg.text()}`));
-    page.on('pageerror', err => console.error(`[页面错误] ${err.message}`));
+    page.on('pageerror', (err) => {
+      console.error(`[页面错误] ${err.message}`);
+      page.evaluate((errorMsg) => window.IMAGE_ERROR = errorMsg, err.message);
+    });
 
     // 加载模板
     const templatePath = path.resolve(process.cwd(), 'src/template.html');
     await page.goto(`file://${templatePath}`, { waitUntil: 'domcontentloaded' });
 
     // 注入数据
-    await page.evaluate(dataStr => {
+    const injectDataStr = JSON.stringify(data);
+    await page.evaluate((dataStr) => {
       window.DATA = JSON.parse(dataStr);
-    }, JSON.stringify(data));
+    }, injectDataStr);
 
-    // 触发绘制
+    // 触发绘制并等待完成
     await page.evaluate(async () => {
-      if (typeof generate === 'function') await generate();
-      else throw new Error('generate函数不存在');
+      if (typeof generate === 'function') {
+        await generate();
+      } else {
+        throw new Error('页面未找到generate函数');
+      }
     });
-
-    // 调试：截取页面全屏截图（本地运行可查看渲染效果）
-    // await page.screenshot({ path: 'debug-render.png', fullPage: true });
 
     // 等待图片生成
     const imageBase64 = await page.waitForFunction(() => {
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
-    }, { timeout: 180000 });
+    }, { timeout: 180000, polling: 1000 });
+
+    // 调试信息
+    const canvasInfo = await page.evaluate(() => ({
+      base64Length: window.IMAGE_BASE64.length,
+      dataNewsLength: window.DATA.news.length
+    }));
+    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}`);
 
     return imageBase64.jsonValue();
 
@@ -151,11 +161,13 @@ async function generateImage(data) {
 }
 
 /**
- * 上传到GitHub
+ * 上传图片到GitHub（自动覆盖）
  */
 async function uploadToGitHub(fileName, fileBuffer) {
   const filePath = `${REPO_CONFIG.path}${fileName}`;
+
   try {
+    // 检查文件是否存在（存在则获取sha用于覆盖）
     const existingFile = await octokit.rest.repos.getContent({
       owner: REPO_CONFIG.owner,
       repo: REPO_CONFIG.repo,
@@ -163,6 +175,7 @@ async function uploadToGitHub(fileName, fileBuffer) {
       ref: REPO_CONFIG.branch
     }).catch(() => null);
 
+    // 上传/覆盖文件
     await octokit.rest.repos.createOrUpdateFileContents({
       owner: REPO_CONFIG.owner,
       repo: REPO_CONFIG.repo,
@@ -170,12 +183,12 @@ async function uploadToGitHub(fileName, fileBuffer) {
       message: `Auto update 60s image: ${fileName}`,
       content: fileBuffer.toString('base64'),
       branch: REPO_CONFIG.branch,
-      ...(existingFile ? { sha: existingFile.data.sha } : {})
+      sha: existingFile?.data?.sha // 有sha则覆盖，无则新建
     });
   } catch (err) {
-    throw new Error(`GitHub上传失败：${err.message}`);
+    throw new Error(`上传GitHub失败：${err.message}`);
   }
 }
 
-// 执行
+// 执行入口
 update60s();
