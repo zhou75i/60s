@@ -94,36 +94,70 @@ async function update60s() {
 async function generateImage(data) {
   let browser;
   try {
-    // 启动无头浏览器
+    console.log('启动无头浏览器...');
+    // 启动无头浏览器（增加日志、调整参数）
     browser = await puppeteer.launch({
       args: [
-        '--no-sandbox', // GitHub Actions必须加
+        '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--disable-images', // 禁用图片加载（加速渲染）
+        '--disable-extensions',
+        '--disable-font-subpixel-positioning'
       ],
-      headless: 'new'
+      headless: 'new',
+      defaultViewport: { width: 800, height: 2000 }, // 固定视口尺寸
+      timeout: 15000 // 浏览器启动超时15秒
     });
 
+    console.log('打开template.html页面...');
     const page = await browser.newPage();
+
+    // 捕获页面内的控制台日志和错误
+    page.on('console', msg => {
+      console.log(`[页面日志] ${msg.text()}`);
+    });
+    page.on('pageerror', err => {
+      console.error(`[页面错误] ${err.message}`);
+      window.IMAGE_ERROR = err.message; // 传递错误
+    });
+
     // 加载本地template.html
     const templatePath = path.resolve(process.cwd(), 'src/template.html');
-    await page.goto(`file://${templatePath}`, { waitUntil: 'domcontentloaded' });
+    console.log(`加载模板文件：${templatePath}`);
+    await page.goto(`file://${templatePath}`, { 
+      waitUntil: 'domcontentloaded',
+      timeout: 20000 // 页面加载超时10秒
+    });
 
     // 注入数据到页面
+    console.log('注入数据到页面...');
     await page.evaluate((injectData) => {
       window.DATA = injectData;
     }, data);
 
-    // 等待图片生成完成（最多30秒）
+    // 精准等待图片生成（每500ms检测一次，超时90秒）
+    console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
-      return window.IMAGE_BASE64 || (window.IMAGE_ERROR && Promise.reject(window.IMAGE_ERROR));
-    }, { timeout: 30000 });
+      // 优先检测错误，再检测成功
+      if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
+      return window.IMAGE_BASE64;
+    }, { 
+      timeout: 90000,
+      polling: 500 // 每500ms检测一次
+    });
 
+    console.log('图片生成完成，获取Base64...');
     return imageBase64.jsonValue();
 
+  } catch (err) {
+    throw new Error(`图片生成失败：${err.message}`);
   } finally {
-    if (browser) await browser.close();
+    if (browser) {
+      console.log('关闭无头浏览器...');
+      await browser.close();
+    }
   }
 }
 
