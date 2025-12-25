@@ -100,7 +100,8 @@ async function generateImage(data) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--allow-file-access-from-files' // 允许本地文件加载远程图片
       ],
       headless: 'new',
       defaultViewport: { width: 1000, height: 3500 },
@@ -133,24 +134,24 @@ async function generateImage(data) {
       window.DATA = injectData;
     }, data);
 
-    // 关键：注入数据后，手动触发页面绘制函数
+    // 关键修复：调用正确的函数名 generate() 而非 draw60sContent()
     console.log('触发页面绘制...');
-    await page.evaluate(() => {
-      if (typeof draw60sContent === 'function') {
-        draw60sContent(); // 重新执行绘制，使用注入的DATA
+    await page.evaluate(async () => {
+      if (typeof generate === 'function') {
+        await generate(); // 等待异步绘制完成（图片加载是异步的）
       } else {
-        throw new Error('页面未找到draw60sContent函数');
+        throw new Error('页面未找到generate函数');
       }
     });
 
-    // 等待图片生成
+    // 等待图片生成（增加超时时间，适配图片加载）
     console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
     }, { 
-      timeout: 90000,
-      polling: 500
+      timeout: 120000, // 延长超时到2分钟，适配图片加载
+      polling: 1000
     });
 
     console.log(`图片生成完成，尺寸：${await page.evaluate(() => `${canvas.width}x${canvas.height}`)}`);
