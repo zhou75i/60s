@@ -17,13 +17,11 @@
 
     <script>
         let DATA = window.DATA || {};
-        let customFont = null; // 自定义字体实例
+        let customFont = null;
         const CONFIG = {
-            // 替换为参考代码的图片链接（解决跨域）
             bannerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/1.png',
             footerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/2.png',
             fontUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/fonts/DouyinSansBold.otf',
-            // 对齐参考代码的坐标（关键：之前坐标太靠上导致内容不可见）
             dateY: 290,
             newsStartY: 430,
             font: {
@@ -37,7 +35,7 @@
         };
 
         /**
-         * 加载自定义字体（对齐参考代码）
+         * 加载自定义字体
          */
         async function loadCustomFont() {
             try {
@@ -48,22 +46,19 @@
                 console.log('自定义字体加载成功');
             } catch (err) {
                 console.warn('自定义字体加载失败，降级为思源黑体：', err);
-                // 降级加载思源黑体
                 const link = document.createElement('link');
                 link.href = 'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@700&display=swap';
                 link.rel = 'stylesheet';
                 document.head.appendChild(link);
-                // 替换字体家族
                 CONFIG.font.date.family = 'Noto Sans SC';
                 CONFIG.font.news.family = 'Noto Sans SC';
                 CONFIG.font.weiyu.family = 'Noto Sans SC';
-                // 等待字体加载
                 await new Promise(resolve => link.onload = resolve);
             }
         }
 
         /**
-         * 格式化日期（对齐参考代码）
+         * 格式化日期
          */
         function formatDate(rawDate, lunarDate) {
             if (!rawDate) rawDate = new Date().toISOString().split('T')[0];
@@ -75,12 +70,12 @@
         }
 
         /**
-         * 文本换行处理（完全对齐参考代码）
+         * 文本换行处理
          */
         function wrapText(ctx, text, x, y, maxWidth, fontConfig, isCenter = false) {
             ctx.font = `${fontConfig.weight || 'normal'} ${fontConfig.size}px ${fontConfig.family}`;
             ctx.fillStyle = fontConfig.color;
-            ctx.textBaseline = 'top'; // 关键：文本基线对齐，避免偏移
+            ctx.textBaseline = 'top';
 
             let lines = [];
             let currentLine = '';
@@ -112,7 +107,7 @@
         }
 
         /**
-         * 绘制白色背景（关键：确保画布不透明）
+         * 绘制白色背景
          */
         function drawWhiteBackground(ctx, width, height) {
             ctx.fillStyle = '#ffffff';
@@ -120,12 +115,12 @@
         }
 
         /**
-         * 加载图片（带跨域+容错）
+         * 加载图片
          */
         function loadImage(url) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
-                img.crossOrigin = 'anonymous'; // 解决跨域绘制问题
+                img.crossOrigin = 'anonymous';
                 img.onload = () => resolve(img);
                 img.onerror = () => reject(new Error(`图片加载失败：${url}`));
                 img.src = url;
@@ -133,38 +128,62 @@
         }
 
         /**
-         * 核心生成逻辑（完全对齐参考代码的双层画布拼接）
+         * 核心生成逻辑（强化数据容错）
          */
         async function generate() {
             try {
-                // 0. 数据容错
-                if (!DATA || typeof DATA !== 'object') throw new Error('注入的数据为空或格式异常');
+                // 最终兜底容错（即使注入失败，也有默认值）
+                DATA = window.DATA || {};
+                DATA.date = DATA.date || new Date().toISOString().split('T')[0];
+                DATA.lunar_date = DATA.lunar_date || '未知';
                 DATA.news = Array.isArray(DATA.news) ? DATA.news : [];
                 DATA.tip = DATA.tip || '暂无微语';
-                console.log('开始生成图片，DATA：', JSON.stringify(DATA, null, 2));
+
+                // 过滤空新闻（避免无效内容）
+                DATA.news = DATA.news.filter(item => item && item.trim() !== '');
+                console.log('最终用于绘制的DATA：', JSON.stringify(DATA, null, 2));
+                console.log(`准备绘制：日期=${DATA.date}，有效新闻数=${DATA.news.length}，微语=${DATA.tip}`);
 
                 // 1. 加载字体
                 await loadCustomFont();
 
-                // 2. 加载Banner和Footer图片（核心：基于Banner尺寸设置画布）
+                // 2. 加载Banner和Footer图片
                 const [bannerImg, footerImg] = await Promise.all([
-                    loadImage(CONFIG.bannerUrl),
-                    loadImage(CONFIG.footerUrl)
+                    loadImage(CONFIG.bannerUrl).catch(err => {
+                        console.warn('Banner加载失败，创建默认图片：', err);
+                        // Banner加载失败时，创建纯色占位图
+                        const img = new Image();
+                        img.width = 1000;
+                        img.height = 364;
+                        return img;
+                    }),
+                    loadImage(CONFIG.footerUrl).catch(err => {
+                        console.warn('Footer加载失败，创建默认图片：', err);
+                        const img = new Image();
+                        img.width = 1000;
+                        img.height = 100;
+                        return img;
+                    })
                 ]);
-                const canvasW = bannerImg.width; // 动态获取Banner宽度
+                const canvasW = bannerImg.width || 1000; // 兜底宽度
                 console.log('图片资源加载完成，Banner尺寸：', canvasW + 'x' + bannerImg.height);
 
                 // 3. 初始化主画布
                 const canvas = document.getElementById('canvas');
                 const ctx = canvas.getContext('2d');
                 canvas.width = canvasW;
-                canvas.height = 5000; // 足够高的初始高度
+                canvas.height = 5000;
 
-                // 4. 绘制白色背景（关键：先画白色背景，确保不透明）
+                // 4. 绘制白色背景
                 drawWhiteBackground(ctx, canvasW, canvas.height);
 
-                // 5. 绘制Banner图片
-                ctx.drawImage(bannerImg, 0, 0);
+                // 5. 绘制Banner图片（兜底：如果图片加载失败，画纯色背景）
+                if (bannerImg.complete) {
+                    ctx.drawImage(bannerImg, 0, 0);
+                } else {
+                    ctx.fillStyle = '#2c3e50';
+                    ctx.fillRect(0, 0, canvasW, 364);
+                }
 
                 // 6. 绘制日期
                 const formatDateStr = formatDate(DATA.date, DATA.lunar_date);
@@ -174,17 +193,21 @@
                 });
                 console.log('日期绘制完成：', formatDateStr);
 
-                // 7. 绘制新闻列表
+                // 7. 绘制新闻列表（强制兜底：如果新闻为空，添加默认内容）
                 let currentY = CONFIG.newsStartY;
                 const newsMaxW = canvasW - CONFIG.padding.left - CONFIG.padding.right;
-                DATA.news.forEach((news, index) => {
+                const drawNews = DATA.news.length > 0 ? DATA.news : [
+                    '暂无今日新闻1', '暂无今日新闻2', '暂无今日新闻3'
+                ];
+
+                drawNews.forEach((news, index) => {
                     const newsText = news || `暂无新闻${index + 1}`;
-                    const text = `${index + 1}、${newsText}`;
+                    const text = `${index + 1}、${newsText.trim()}`;
                     const newsLines = wrapText(ctx, text, CONFIG.padding.left, currentY, newsMaxW, CONFIG.font.news);
                     newsLines.forEach(line => ctx.fillText(line.text, line.x, line.y));
                     currentY = newsLines.at(-1).y + CONFIG.font.news.size * CONFIG.font.lineHeight * 1.1;
                 });
-                console.log('新闻绘制完成，共', DATA.news.length, '条');
+                console.log('新闻绘制完成，共', drawNews.length, '条');
 
                 // 8. 绘制微语
                 const weiyuText = `【微语】${DATA.tip}`;
@@ -196,26 +219,32 @@
                 });
                 console.log('微语绘制完成：', weiyuText);
 
-                // 9. 裁剪画布（对齐参考代码的双层画布逻辑）
+                // 9. 裁剪画布
                 const clipHeight = weiyuLines.at(-1).y + CONFIG.font.weiyu.size * CONFIG.font.lineHeight + CONFIG.clipExtra;
-                // 临时裁剪画布
                 const clipCanvas = document.createElement('canvas');
                 clipCanvas.width = canvasW;
                 clipCanvas.height = clipHeight;
                 const clipCtx = clipCanvas.getContext('2d');
-                drawWhiteBackground(clipCtx, canvasW, clipHeight); // 裁剪画布也画白色背景
+                drawWhiteBackground(clipCtx, canvasW, clipHeight);
                 clipCtx.drawImage(canvas, 0, 0, canvasW, clipHeight, 0, 0, canvasW, clipHeight);
 
                 // 10. 最终画布（拼接Footer）
                 const finalCanvas = document.createElement('canvas');
                 finalCanvas.width = canvasW;
-                finalCanvas.height = clipHeight + footerImg.height;
+                finalCanvas.height = clipHeight + (footerImg.height || 100);
                 const finalCtx = finalCanvas.getContext('2d');
-                drawWhiteBackground(finalCtx, canvasW, finalCanvas.height); // 最终画布强制白色背景
+                drawWhiteBackground(finalCtx, canvasW, finalCanvas.height);
                 finalCtx.drawImage(clipCanvas, 0, 0);
-                finalCtx.drawImage(footerImg, 0, clipHeight); // 拼接Footer图片
+                
+                // Footer兜底绘制
+                if (footerImg.complete) {
+                    finalCtx.drawImage(footerImg, 0, clipHeight);
+                } else {
+                    ctx.fillStyle = '#2c3e50';
+                    ctx.fillRect(0, clipHeight, canvasW, 100);
+                }
 
-                // 11. 生成Base64（强制不透明PNG）
+                // 11. 生成Base64
                 window.IMAGE_BASE64 = finalCanvas.toDataURL('image/png', 1.0);
                 console.log('图片生成成功，Base64长度：', window.IMAGE_BASE64.length);
 
