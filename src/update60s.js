@@ -28,7 +28,7 @@ if (!process.env.GH_TOKEN || !REPO_CONFIG.owner || !REPO_CONFIG.repo) {
 
 // 入口函数
 async function update60s() {
-  // 获取API数据（带重试+详细日志）
+  // 获取API数据（带重试）
   async function fetch60sData() {
     let retries = 3;
     while (retries > 0) {
@@ -47,29 +47,19 @@ async function update60s() {
 
         if (!response.ok) throw new Error(`API请求失败：${response.status} ${response.statusText}`);
         const apiData = await response.json();
-        
-        // 强制序列化+反序列化，排除不可序列化内容
         const cleanData = JSON.parse(JSON.stringify(apiData.data));
         
-        // 校验并修复核心数据（关键：确保news是数组）
-        if (!cleanData) throw new Error('API返回data为空');
-        if (!cleanData.date) cleanData.date = new Date().toISOString().split('T')[0];
-        cleanData.news = Array.isArray(cleanData.news) ? cleanData.news : [];
+        // 数据兜底
+        cleanData.date = cleanData.date || new Date().toISOString().split('T')[0];
         cleanData.lunar_date = cleanData.lunar_date || '未知';
+        cleanData.news = Array.isArray(cleanData.news) ? cleanData.news.filter(n => n && n.trim()) : [];
         cleanData.tip = cleanData.tip || '暂无微语';
 
-        // 打印API原始数据（调试用）
-        console.log('API返回的cleanData：', JSON.stringify(cleanData, null, 2));
-        console.log(`✅ API数据校验完成：日期=${cleanData.date}，新闻数=${cleanData.news.length}，微语=${cleanData.tip}`);
-
-        if (cleanData.news.length === 0 && retries > 0) {
-          throw new Error('API返回news为空，重试...');
-        }
         return cleanData;
       } catch (err) {
         retries--;
         if (retries === 0) throw err;
-        console.log(`API请求失败，重试(${3 - retries}/3)...`, err.message);
+        console.log(`API重试(${3 - retries}/3)：`, err.message);
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
@@ -78,7 +68,7 @@ async function update60s() {
   try {
     // 1. 获取API数据
     const apiData = await fetch60sData();
-    console.log(`成功获取${apiData.date}的60s数据，共${apiData.news.length}条新闻`);
+    console.log(`✅ 获取数据：${apiData.date}，新闻数=${apiData.news.length}`);
 
     // 2. 生成图片
     const imageBase64 = await generateImage(apiData);
@@ -87,7 +77,7 @@ async function update60s() {
 
     // 3. 上传到GitHub
     await uploadToGitHub(fileName, imageBuffer);
-    console.log(`✅ 成功上传图片到GitHub：${REPO_CONFIG.path}${fileName}`);
+    console.log(`✅ 上传成功：${REPO_CONFIG.path}${fileName}`);
 
   } catch (err) {
     console.error('❌ 执行失败：', err.message);
@@ -96,12 +86,11 @@ async function update60s() {
 }
 
 /**
- * 生成图片（核心：修复数据注入+详细调试）
+ * 生成图片（增加页面截图调试）
  */
 async function generateImage(data) {
   let browser;
   try {
-    console.log('启动无头浏览器...');
     browser = await puppeteer.launch({
       args: [
         '--no-sandbox',
@@ -110,102 +99,63 @@ async function generateImage(data) {
         '--disable-gpu',
         '--allow-file-access-from-files',
         '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--font-render-hinting=full' // 强制字体渲染
       ],
       headless: 'new',
       defaultViewport: { 
-        width: 1080,
-        height: 6000,
-        deviceScaleFactor: 2
+        width: 1000,  // 适配Banner宽度
+        height: 3000,
+        deviceScaleFactor: 2 // 高清渲染
       },
-      timeout: 60000
+      timeout: 120000
     });
 
     const page = await browser.newPage();
 
-    // 捕获页面所有日志
-    page.on('console', msg => {
-      const type = msg.type();
-      const text = msg.text();
-      console.log(`[页面${type}] ${text}`);
-    });
-    page.on('pageerror', (err) => {
-      console.error(`[页面错误] ${err.message}`);
-      page.evaluate((errorMsg) => {
-        window.IMAGE_ERROR = errorMsg;
-      }, err.message);
-    });
+    // 捕获页面日志
+    page.on('console', msg => console.log(`[页面${msg.type()}] ${msg.text()}`));
+    page.on('pageerror', err => console.error(`[页面错误] ${err.message}`));
 
-    // 加载模板页面
+    // 加载模板
     const templatePath = path.resolve(process.cwd(), 'src/template.html');
-    console.log(`加载模板文件：${templatePath}`);
-    await page.goto(`file://${templatePath}`, { 
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
+    await page.goto(`file://${templatePath}`, { waitUntil: 'domcontentloaded' });
 
-    // 强制序列化数据（避免Puppeteer注入异常）
-    const injectDataStr = JSON.stringify(data);
-    console.log('准备注入页面的数据：', injectDataStr);
+    // 注入数据
+    await page.evaluate(dataStr => {
+      window.DATA = JSON.parse(dataStr);
+    }, JSON.stringify(data));
 
-    // 注入数据（分两步：先传字符串，再解析，避免直接传对象丢失）
-    console.log('注入数据到页面...');
-    await page.evaluate((dataStr) => {
-      window.DATA_RAW = dataStr;
-      window.DATA = JSON.parse(dataStr); // 页面内解析，确保结构完整
-      console.log('页面接收的DATA：', JSON.stringify(window.DATA, null, 2));
-    }, injectDataStr);
-
-    // 触发绘制（等待异步完成）
-    console.log('触发页面绘制...');
+    // 触发绘制
     await page.evaluate(async () => {
-      if (typeof generate === 'function') {
-        await generate();
-      } else {
-        throw new Error('页面未找到generate函数');
-      }
+      if (typeof generate === 'function') await generate();
+      else throw new Error('generate函数不存在');
     });
+
+    // 调试：截取页面全屏截图（本地运行可查看渲染效果）
+    // await page.screenshot({ path: 'debug-render.png', fullPage: true });
 
     // 等待图片生成
-    console.log('等待图片生成...');
     const imageBase64 = await page.waitForFunction(() => {
       if (window.IMAGE_ERROR) throw new Error(window.IMAGE_ERROR);
       return window.IMAGE_BASE64;
-    }, { 
-      timeout: 180000,
-      polling: 1000
-    });
-
-    // 调试信息
-    const canvasInfo = await page.evaluate(() => {
-      return {
-        base64Length: window.IMAGE_BASE64.length,
-        dataNewsLength: window.DATA.news.length,
-        error: window.IMAGE_ERROR || '无'
-      };
-    });
-    console.log(`图片生成完成，Base64长度：${canvasInfo.base64Length}，页面内新闻数：${canvasInfo.dataNewsLength}`);
+    }, { timeout: 180000 });
 
     return imageBase64.jsonValue();
 
   } catch (err) {
     throw new Error(`图片生成失败：${err.message}`);
   } finally {
-    if (browser) {
-      console.log('关闭无头浏览器...');
-      await browser.close();
-    }
+    if (browser) await browser.close();
   }
 }
 
 /**
- * 上传图片到GitHub
+ * 上传到GitHub
  */
 async function uploadToGitHub(fileName, fileBuffer) {
   const filePath = `${REPO_CONFIG.path}${fileName}`;
-
   try {
-    // 检查文件是否存在
     const existingFile = await octokit.rest.repos.getContent({
       owner: REPO_CONFIG.owner,
       repo: REPO_CONFIG.repo,
@@ -213,7 +163,6 @@ async function uploadToGitHub(fileName, fileBuffer) {
       ref: REPO_CONFIG.branch
     }).catch(() => null);
 
-    // 上传/更新文件
     await octokit.rest.repos.createOrUpdateFileContents({
       owner: REPO_CONFIG.owner,
       repo: REPO_CONFIG.repo,
@@ -224,9 +173,9 @@ async function uploadToGitHub(fileName, fileBuffer) {
       ...(existingFile ? { sha: existingFile.data.sha } : {})
     });
   } catch (err) {
-    throw new Error(`上传GitHub失败：${err.message}`);
+    throw new Error(`GitHub上传失败：${err.message}`);
   }
 }
 
-// 执行入口
+// 执行
 update60s();
