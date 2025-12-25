@@ -18,12 +18,12 @@
     <script>
         let DATA = window.DATA || {};
         const CONFIG = {
-            // 替换为远程图片链接（移除Base64）
+            // 远程图片链接（增加备用链接）
             bannerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/1.png',
             footerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/2.png',
-            fontUrl: 'https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/fonts/fa-solid-900.woff2', // 公共字体CDN
-            dateY: 90, // 调整y轴位置（原290太靠下，适配简化版布局）
-            newsStartY: 150,
+            fontUrl: 'https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/fonts/fa-solid-900.woff2',
+            dateY: 70, // 校准日期Y轴（适配120高度的banner）
+            newsStartY: 140, // 校准新闻起始Y轴
             font: {
                 date: { size: 32, color: '#ffffff', weight: 'bold' },
                 news: { size: 28, color: '#333333', weight: 'normal' },
@@ -31,17 +31,19 @@
                 lineHeight: 1.8
             },
             padding: { left: 50, right: 50 },
-            clipExtra: 20
+            clipExtra: 20,
+            bannerHeight: 120, // 固定banner高度（避免图片加载失败后高度不一致）
+            footerHeight: 60   // 固定footer高度
         };
 
         // 辅助函数：加载图片（带容错和超时）
         function loadImage(url, timeout = 10000) {
             return new Promise((resolve) => {
                 const img = new Image();
-                img.crossOrigin = 'anonymous'; // 解决跨域绘制问题
+                img.crossOrigin = 'anonymous';
                 const timer = setTimeout(() => {
                     console.warn(`图片加载超时/失败：${url}，使用纯色替代`);
-                    resolve(null); // 加载失败返回null，后续用纯色替代
+                    resolve(null);
                 }, timeout);
 
                 img.onload = () => {
@@ -57,95 +59,102 @@
             });
         }
 
-        // 生成图片核心逻辑（简化，无外部依赖）
+        // 生成图片核心逻辑
         async function generate() {
             try {
-                // 新增：全量数据容错
-                if (!DATA || typeof DATA !== 'object') {
-                    throw new Error('注入的数据为空或格式异常');
-                }
+                console.log('开始绘制，DATA数据：', JSON.stringify(DATA).substring(0, 100));
+                
+                // 数据容错
+                if (!DATA || typeof DATA !== 'object') throw new Error('注入的数据为空或格式异常');
                 DATA.news = Array.isArray(DATA.news) ? DATA.news : [];
                 DATA.tip = DATA.tip || '暂无微语';
 
-                // 1. 创建canvas
+                // 1. 初始化Canvas（强制不透明背景）
                 const canvas = document.getElementById('canvas');
                 const ctx = canvas.getContext('2d');
-                // 设置canvas尺寸（固定宽度，高度自适应）
-                canvas.width = 800;
-                canvas.height = 2000;
+                const canvasWidth = 800;
+                canvas.width = canvasWidth;
+                canvas.height = 2000; // 初始足够高的画布
 
-                // 2. 绘制背景（浅灰色）
+                // 强制填充背景色（关键：先填充整个画布，确保无透明区域）
                 ctx.fillStyle = '#f5f5f5';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
+                console.log('已填充画布背景，尺寸：', canvas.width + 'x' + canvas.height);
 
-                // 3. 加载并绘制banner图片（替代原纯色矩形）
+                // 2. 绘制Banner（优先图片，失败则纯色）
                 const bannerImg = await loadImage(CONFIG.bannerUrl);
                 if (bannerImg) {
-                    // 绘制banner图片（铺满宽度，高度自适应）
-                    const bannerHeight = canvas.width * (bannerImg.height / bannerImg.width);
-                    ctx.drawImage(bannerImg, 0, 0, canvas.width, bannerHeight);
+                    // 绘制Banner图片（铺满宽度，高度固定为CONFIG.bannerHeight）
+                    ctx.drawImage(bannerImg, 0, 0, canvasWidth, CONFIG.bannerHeight);
+                    console.log('绘制Banner图片完成');
                 } else {
-                    // 加载失败时用原纯色替代
+                    // 纯色Banner（深色背景，确保日期文字可见）
                     ctx.fillStyle = '#2c3e50';
-                    ctx.fillRect(0, 0, canvas.width, 100);
+                    ctx.fillRect(0, 0, canvasWidth, CONFIG.bannerHeight);
+                    console.log('绘制纯色Banner完成');
                 }
 
-                // 4. 绘制日期
+                // 3. 绘制日期（确保在Banner内）
                 const formatDateStr = getFormatDate(DATA.date, DATA.lunar_date);
                 ctx.fillStyle = CONFIG.font.date.color;
                 ctx.font = `${CONFIG.font.date.weight} ${CONFIG.font.date.size}px sans-serif`;
                 ctx.textAlign = 'center';
-                ctx.fillText(formatDateStr, canvas.width / 2, CONFIG.dateY);
+                ctx.fillText(formatDateStr, canvasWidth / 2, CONFIG.dateY);
+                console.log('绘制日期：', formatDateStr, '坐标：', canvasWidth/2, CONFIG.dateY);
 
-                // 5. 绘制新闻列表
+                // 4. 绘制新闻列表
                 ctx.fillStyle = CONFIG.font.news.color;
                 ctx.font = `${CONFIG.font.news.weight} ${CONFIG.font.news.size}px sans-serif`;
                 ctx.textAlign = 'left';
                 let currentY = CONFIG.newsStartY;
+                const lineHeightNews = CONFIG.font.news.size * CONFIG.font.lineHeight;
+                const maxWidth = canvasWidth - CONFIG.padding.left - CONFIG.padding.right;
+
                 DATA.news.forEach((news, index) => {
-                    // 容错：单条新闻为空
                     const newsText = news || `暂无新闻${index + 1}`;
                     const text = `${index + 1}、${newsText}`;
-                    // 换行处理（简化版）
-                    const lineHeight = CONFIG.font.news.size * CONFIG.font.lineHeight;
-                    const maxWidth = canvas.width - CONFIG.padding.left - CONFIG.padding.right;
                     const lines = wrapText(ctx, text, maxWidth);
+                    
                     lines.forEach(line => {
                         ctx.fillText(line, CONFIG.padding.left, currentY);
-                        currentY += lineHeight;
+                        console.log(`绘制新闻${index+1}：`, line, '坐标：', CONFIG.padding.left, currentY);
+                        currentY += lineHeightNews;
                     });
                 });
 
-                // 6. 绘制微语
+                // 5. 绘制微语
                 ctx.fillStyle = CONFIG.font.weiyu.color;
                 ctx.font = `${CONFIG.font.weiyu.weight} ${CONFIG.font.weiyu.size}px sans-serif`;
                 const weiyuText = `【微语】${DATA.tip}`;
-                const weiyuLines = wrapText(ctx, weiyuText, canvas.width - CONFIG.padding.left - CONFIG.padding.right);
+                const weiyuLines = wrapText(ctx, weiyuText, maxWidth);
+                const lineHeightWeiyu = CONFIG.font.weiyu.size * CONFIG.font.lineHeight;
+                
                 weiyuLines.forEach(line => {
                     ctx.fillText(line, CONFIG.padding.left, currentY);
-                    currentY += CONFIG.font.weiyu.size * CONFIG.font.lineHeight;
+                    console.log('绘制微语：', line, '坐标：', CONFIG.padding.left, currentY);
+                    currentY += lineHeightWeiyu;
                 });
 
-                // 7. 加载并绘制footer图片（替代原纯色矩形）
-                const footerImg = await loadImage(CONFIG.footerUrl);
+                // 6. 绘制Footer（优先图片，失败则纯色）
                 const footerTop = currentY + 20;
+                const footerImg = await loadImage(CONFIG.footerUrl);
                 if (footerImg) {
-                    const footerHeight = canvas.width * (footerImg.height / footerImg.width);
-                    ctx.drawImage(footerImg, 0, footerTop, canvas.width, footerHeight);
-                    currentY = footerTop + footerHeight;
+                    ctx.drawImage(footerImg, 0, footerTop, canvasWidth, CONFIG.footerHeight);
+                    console.log('绘制Footer图片完成，坐标：', 0, footerTop);
                 } else {
-                    // 加载失败时用原纯色替代
                     ctx.fillStyle = '#2c3e50';
-                    ctx.fillRect(0, footerTop, canvas.width, 50);
-                    currentY = footerTop + 50;
+                    ctx.fillRect(0, footerTop, canvasWidth, CONFIG.footerHeight);
+                    console.log('绘制纯色Footer完成，坐标：', 0, footerTop);
                 }
 
-                // 8. 裁剪画布到实际内容高度
-                canvas.height = currentY + 30;
+                // 7. 裁剪画布到实际内容（保留足够底部空间，避免内容被截断）
+                const finalHeight = footerTop + CONFIG.footerHeight + 20;
+                canvas.height = finalHeight;
+                console.log('裁剪后画布尺寸：', canvas.width + 'x' + canvas.height);
 
-                // 生成Base64
+                // 8. 生成Base64（强制PNG不透明）
                 window.IMAGE_BASE64 = canvas.toDataURL('image/png', 1.0);
-                console.log('图片生成成功：', window.IMAGE_BASE64.substring(0, 50) + '...');
+                console.log('图片生成成功，Base64长度：', window.IMAGE_BASE64.length);
 
             } catch (err) {
                 console.error('图片生成失败：', err);
@@ -153,20 +162,17 @@
             }
         }
 
-        // 辅助函数：格式化日期（增加全量容错）
+        // 辅助函数：格式化日期
         function getFormatDate(rawDate, lunarDate) {
-            // 容错：rawDate 为空时用当前日期
             const dateStr = rawDate || new Date().toISOString().split('T')[0];
             const [year, month, day] = dateStr.split('-').map(Number);
-            // 容错：月份/日期补零 + 判空
             const formattedYear = year || new Date().getFullYear();
-            const formattedMonth = month ? month.toString().padStart(2, '0') : new Date().getMonth() + 1;
-            const formattedDay = day ? day.toString().padStart(2, '0') : new Date().getDate();
+            const formattedMonth = month ? month.toString().padStart(2, '0') : (new Date().getMonth() + 1).toString().padStart(2, '0');
+            const formattedDay = day ? day.toString().padStart(2, '0') : new Date().getDate().toString().padStart(2, '0');
             
             const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
             const weekDay = weekDays[new Date(dateStr).getDay()];
             
-            // 容错：lunarDate 为空时不显示
             return `${formattedYear}年${formattedMonth}月${formattedDay}日 ${lunarDate || ''} ${weekDay}`.replace(/\s+/g, ' ').trim();
         }
 
@@ -188,9 +194,6 @@
             if (currentLine) lines.push(currentLine);
             return lines;
         }
-
-        // 移除立即执行，改为由外部（puppeteer）触发
-        // generate(); 
     </script>
 </body>
 </html>
