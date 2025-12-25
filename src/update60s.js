@@ -108,19 +108,24 @@ async function generateImage(data) {
       ],
       headless: 'new',
       defaultViewport: { width: 800, height: 2000 }, // 固定视口尺寸
-      timeout: 15000 // 浏览器启动超时15秒
+      timeout: 30000 // 浏览器启动超时30秒
     });
 
     console.log('打开template.html页面...');
     const page = await browser.newPage();
 
-    // 捕获页面内的控制台日志和错误
+    // 捕获页面内的控制台日志
     page.on('console', msg => {
       console.log(`[页面日志] ${msg.text()}`);
     });
-    page.on('pageerror', err => {
+
+    // 修复：正确捕获页面错误并传递到浏览器端
+    page.on('pageerror', async (err) => {
       console.error(`[页面错误] ${err.message}`);
-      window.IMAGE_ERROR = err.message; // 传递错误
+      // 向浏览器页面注入错误信息（浏览器端可访问 window）
+      await page.evaluate((errorMsg) => {
+        window.IMAGE_ERROR = errorMsg;
+      }, err.message);
     });
 
     // 加载本地template.html
@@ -128,7 +133,7 @@ async function generateImage(data) {
     console.log(`加载模板文件：${templatePath}`);
     await page.goto(`file://${templatePath}`, { 
       waitUntil: 'domcontentloaded',
-      timeout: 20000 // 页面加载超时10秒
+      timeout: 30000 // 页面加载超时30秒
     });
 
     // 注入数据到页面
