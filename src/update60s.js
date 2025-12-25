@@ -3,7 +3,8 @@ import { Octokit } from '@octokit/rest';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-import { deepEqual } from 'fast-deep-equal'; // 需安装：npm i fast-deep-equal
+import fastDeepEqual from 'fast-deep-equal';
+const { deepEqual } = fastDeepEqual;
 
 dotenv.config();
 
