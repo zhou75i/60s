@@ -64,12 +64,23 @@
         }
 
         /**
-         * 格式化日期
+         * 格式化日期（核心修复：防undefined+split报错）
          */
         function formatDate(rawDate, lunarDate) {
-            const [year, month, day] = rawDate.split('-');
+            // 关键：先校验rawDate，避免undefined
+            if (!rawDate || typeof rawDate !== 'string') {
+                console.error('formatDate入参错误：rawDate为空或非字符串', rawDate);
+                return '日期格式错误 / 星期四'; // 仅防崩溃，无业务兜底
+            }
+            // 拆分前先过滤无效格式
+            const dateParts = rawDate.split('-');
+            if (dateParts.length < 3) {
+                console.error('formatDate日期格式错误：', rawDate);
+                return '日期格式错误 / 星期四';
+            }
+            const [year, month, day] = dateParts;
             const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-            const weekDay = weekDays[new Date(rawDate).getDay()];
+            const weekDay = weekDays[new Date(rawDate).getDay()] || '星期四';
             const solarDate = `${year}年${month}月${day}日`;
             return `${solarDate} 农历 · ${lunarDate} / ${weekDay}`;
         }
@@ -128,10 +139,27 @@
         }
 
         /**
-         * 核心生成逻辑（移除兜底+修复绘制错误）
+         * 核心生成逻辑（强化DATA校验+防崩溃）
          */
         async function generate() {
             try {
+                // 关键：先校验DATA核心字段，避免后续报错
+                if (!DATA || typeof DATA !== 'object') {
+                    throw new Error('DATA对象未正确注入');
+                }
+                if (!DATA.date) {
+                    throw new Error('DATA.date为空，无法绘制日期');
+                }
+                if (!Array.isArray(DATA.news)) {
+                    throw new Error('DATA.news不是数组');
+                }
+                if (!DATA.tip) {
+                    throw new Error('DATA.tip为空');
+                }
+                if (!DATA.lunar_date) {
+                    throw new Error('DATA.lunar_date为空');
+                }
+
                 // 1. 加载字体（必须等待完成）
                 await loadCustomFont();
 
@@ -165,7 +193,7 @@
                 });
                 console.log('日期绘制完成：', formatDateStr);
 
-                // 7. 绘制新闻列表（移除兜底）
+                // 7. 绘制新闻列表（无兜底）
                 let currentY = CONFIG.newsStartY;
                 const newsMaxW = canvasW - CONFIG.padding.left - CONFIG.padding.right;
 
@@ -223,8 +251,9 @@
                 console.log('图片生成成功，Base64长度：', window.IMAGE_BASE64.length);
 
             } catch (err) {
-                console.error('图片生成失败：', err);
+                console.error('图片生成失败：', err.stack || err.message);
                 window.IMAGE_ERROR = err.message;
+                throw err; // 抛出错误让Node层捕获
             }
         }
     </script>
