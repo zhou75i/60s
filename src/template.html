@@ -10,6 +10,8 @@
         #img-result { max-width: 100%; height: auto; }
         canvas { display: none; }
     </style>
+    <!-- 强制加载思源黑体（避免字体缺失） -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <canvas id="canvas"></canvas>
@@ -17,44 +19,41 @@
 
     <script>
         let DATA = window.DATA || {};
-        let customFont = null;
         const CONFIG = {
-            bannerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/1.png',
-            footerUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/img/2.png',
-            fontUrl: 'https://cdn.jsdmirror.com/gh/zhou75i/60s@main/fonts/DouyinSansBold.otf',
-            dateY: 290,
-            newsStartY: 430,
+            bannerUrl: 'https://raw.githubusercontent.com/zhou75i/60s/main/img/1.png',
+            footerUrl: 'https://raw.githubusercontent.com/zhou75i/60s/main/img/2.png',
+            // 关键调整：新闻起始Y坐标（远离Banner，确保视觉可见）
+            dateY: 120,       // 日期上移，适配Banner视觉中心
+            newsStartY: 400,  // 新闻起始Y下调，确保在Banner下方完全可见
             font: {
-                date: { size: 32, family: 'DouyinSansBold', color: '#ffffff', weight: 'normal' },
-                news: { size: 28, family: 'DouyinSansBold', color: '#333333' },
-                weiyu: { size: 26, family: 'DouyinSansBold', color: '#666666' },
-                lineHeight: 1.8
+                date: { size: 36, family: 'Noto Sans SC', color: '#ffffff', weight: '700' },
+                news: { size: 24, family: 'Noto Sans SC', color: '#333333', weight: '400' }, // 缩小字号+黑体确保可见
+                weiyu: { size: 22, family: 'Noto Sans SC', color: '#666666', weight: '400' },
+                lineHeight: 2.0 // 增大行高，避免文字重叠
             },
-            padding: { left: 50, right: 50 },
-            clipExtra: 20
+            padding: { left: 60, right: 60 }, // 增大左右内边距，适配换行
+            clipExtra: 50,                     // 增大裁剪余量，避免内容被裁
+            bannerHeight: 364,                 // 固定Banner高度
+            footerHeight: 100                  // 固定Footer高度
         };
 
         /**
-         * 加载自定义字体
+         * 加载图片（带兜底）
          */
-        async function loadCustomFont() {
-            try {
-                const font = new FontFace('DouyinSansBold', `url(${CONFIG.fontUrl})`);
-                await font.load();
-                document.fonts.add(font);
-                customFont = font;
-                console.log('自定义字体加载成功');
-            } catch (err) {
-                console.warn('自定义字体加载失败，降级为思源黑体：', err);
-                const link = document.createElement('link');
-                link.href = 'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@700&display=swap';
-                link.rel = 'stylesheet';
-                document.head.appendChild(link);
-                CONFIG.font.date.family = 'Noto Sans SC';
-                CONFIG.font.news.family = 'Noto Sans SC';
-                CONFIG.font.weiyu.family = 'Noto Sans SC';
-                await new Promise(resolve => link.onload = resolve);
-            }
+        function loadImage(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => resolve(img);
+                img.onerror = () => {
+                    // 图片加载失败，创建纯色占位Banner/Footer
+                    const placeholder = new Image();
+                    placeholder.width = 1000;
+                    placeholder.height = url.includes('1.png') ? CONFIG.bannerHeight : CONFIG.footerHeight;
+                    resolve(placeholder);
+                };
+                img.src = url;
+            });
         }
 
         /**
@@ -65,191 +64,144 @@
             const [year, month, day] = rawDate.split('-');
             const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
             const weekDay = weekDays[new Date(rawDate).getDay()];
-            const solarDate = `${year}年${month}月${day}日`;
-            return `${solarDate} 农历 · ${lunarDate || '未知'} / ${weekDay}`;
+            return `${year}年${month}月${day}日 农历·${lunarDate || '未知'} / ${weekDay}`;
         }
 
         /**
-         * 文本换行处理
+         * 文本换行（适配长文本，强制拆分）
          */
-        function wrapText(ctx, text, x, y, maxWidth, fontConfig, isCenter = false) {
-            ctx.font = `${fontConfig.weight || 'normal'} ${fontConfig.size}px ${fontConfig.family}`;
+        function wrapText(ctx, text, x, y, maxWidth, fontConfig) {
+            ctx.font = `${fontConfig.weight} ${fontConfig.size}px ${fontConfig.family}`;
             ctx.fillStyle = fontConfig.color;
-            ctx.textBaseline = 'top';
+            ctx.textBaseline = 'top'; // 固定基线，避免偏移
 
-            let lines = [];
+            const lines = [];
             let currentLine = '';
             let currentY = y;
-            const lineH = fontConfig.size * CONFIG.font.lineHeight;
+            const lineHeight = fontConfig.size * CONFIG.lineHeight;
 
-            for (let i = 0; i < text.length; i++) {
-                const char = text[i];
+            // 逐字拆分，确保超长文本也能换行
+            for (let char of text) {
                 const testLine = currentLine + char;
                 if (ctx.measureText(testLine).width > maxWidth && currentLine) {
-                    lines.push({ text: currentLine, y: currentY, width: ctx.measureText(currentLine).width });
+                    lines.push({ text: currentLine, y: currentY });
                     currentLine = char;
-                    currentY += lineH;
+                    currentY += lineHeight;
                 } else {
                     currentLine = testLine;
                 }
             }
-            if (currentLine) {
-                lines.push({ text: currentLine, y: currentY, width: ctx.measureText(currentLine).width });
-            }
-
-            if (isCenter) {
-                const canvasW = ctx.canvas.width;
-                lines = lines.map(line => ({ ...line, x: (canvasW - line.width) / 2 }));
-            } else {
-                lines = lines.map(line => ({ ...line, x }));
-            }
+            if (currentLine) lines.push({ text: currentLine, y: currentY });
             return lines;
         }
 
         /**
-         * 绘制白色背景
-         */
-        function drawWhiteBackground(ctx, width, height) {
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, width, height);
-        }
-
-        /**
-         * 加载图片
-         */
-        function loadImage(url) {
-            return new Promise((resolve, reject) => {
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.onload = () => resolve(img);
-                img.onerror = () => reject(new Error(`图片加载失败：${url}`));
-                img.src = url;
-            });
-        }
-
-        /**
-         * 核心生成逻辑（强化数据容错）
+         * 核心绘制逻辑（可视化优先）
          */
         async function generate() {
             try {
-                // 最终兜底容错（即使注入失败，也有默认值）
+                // 最终数据兜底
                 DATA = window.DATA || {};
                 DATA.date = DATA.date || new Date().toISOString().split('T')[0];
                 DATA.lunar_date = DATA.lunar_date || '未知';
-                DATA.news = Array.isArray(DATA.news) ? DATA.news : [];
+                DATA.news = Array.isArray(DATA.news) ? DATA.news.filter(n => n && n.trim()) : [];
                 DATA.tip = DATA.tip || '暂无微语';
 
-                // 过滤空新闻（避免无效内容）
-                DATA.news = DATA.news.filter(item => item && item.trim() !== '');
-                console.log('最终用于绘制的DATA：', JSON.stringify(DATA, null, 2));
-                console.log(`准备绘制：日期=${DATA.date}，有效新闻数=${DATA.news.length}，微语=${DATA.tip}`);
+                console.log('绘制数据确认：', {
+                    date: DATA.date,
+                    newsCount: DATA.news.length,
+                    weiyu: DATA.tip
+                });
 
-                // 1. 加载字体
-                await loadCustomFont();
-
-                // 2. 加载Banner和Footer图片
+                // 1. 加载图片资源
                 const [bannerImg, footerImg] = await Promise.all([
-                    loadImage(CONFIG.bannerUrl).catch(err => {
-                        console.warn('Banner加载失败，创建默认图片：', err);
-                        // Banner加载失败时，创建纯色占位图
-                        const img = new Image();
-                        img.width = 1000;
-                        img.height = 364;
-                        return img;
-                    }),
-                    loadImage(CONFIG.footerUrl).catch(err => {
-                        console.warn('Footer加载失败，创建默认图片：', err);
-                        const img = new Image();
-                        img.width = 1000;
-                        img.height = 100;
-                        return img;
-                    })
+                    loadImage(CONFIG.bannerUrl),
+                    loadImage(CONFIG.footerUrl)
                 ]);
-                const canvasW = bannerImg.width || 1000; // 兜底宽度
-                console.log('图片资源加载完成，Banner尺寸：', canvasW + 'x' + bannerImg.height);
+                const canvasWidth = bannerImg.width || 1000;
 
-                // 3. 初始化主画布
+                // 2. 初始化画布（固定宽度，足够高的高度）
                 const canvas = document.getElementById('canvas');
                 const ctx = canvas.getContext('2d');
-                canvas.width = canvasW;
-                canvas.height = 5000;
+                canvas.width = canvasWidth;
+                canvas.height = 3000; // 足够高，避免内容溢出
 
-                // 4. 绘制白色背景
-                drawWhiteBackground(ctx, canvasW, canvas.height);
+                // 3. 绘制白色背景（强制不透明）
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvasWidth, canvas.height);
 
-                // 5. 绘制Banner图片（兜底：如果图片加载失败，画纯色背景）
-                if (bannerImg.complete) {
-                    ctx.drawImage(bannerImg, 0, 0);
-                } else {
-                    ctx.fillStyle = '#2c3e50';
-                    ctx.fillRect(0, 0, canvasW, 364);
-                }
+                // 4. 绘制Banner（优先图片，失败则纯色）
+                ctx.drawImage(bannerImg, 0, 0, canvasWidth, CONFIG.bannerHeight);
+                // Banner底部绘制分割线（视觉区分）
+                ctx.strokeStyle = '#eeeeee';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(CONFIG.padding.left, CONFIG.bannerHeight);
+                ctx.lineTo(canvasWidth - CONFIG.padding.right, CONFIG.bannerHeight);
+                ctx.stroke();
 
-                // 6. 绘制日期
-                const formatDateStr = formatDate(DATA.date, DATA.lunar_date);
-                const dateLines = wrapText(ctx, formatDateStr, 0, CONFIG.dateY, canvasW - CONFIG.padding.left - CONFIG.padding.right, CONFIG.font.date, true);
-                dateLines.forEach(line => {
-                    ctx.fillText(line.text, line.x, line.y);
-                });
-                console.log('日期绘制完成：', formatDateStr);
+                // 5. 绘制日期（居中，白色文字+阴影确保可见）
+                const dateText = formatDate(DATA.date, DATA.lunar_date);
+                ctx.font = `${CONFIG.font.date.weight} ${CONFIG.font.date.size}px ${CONFIG.font.date.family}`;
+                ctx.fillStyle = CONFIG.font.date.color;
+                ctx.textAlign = 'center';
+                ctx.shadowColor = 'rgba(0,0,0,0.5)'; // 文字阴影，确保在Banner上可见
+                ctx.shadowBlur = 3;
+                ctx.fillText(dateText, canvasWidth / 2, CONFIG.dateY);
+                ctx.shadowBlur = 0; // 关闭阴影
 
-                // 7. 绘制新闻列表（强制兜底：如果新闻为空，添加默认内容）
+                // 6. 绘制新闻列表（核心：确保可见）
+                ctx.textAlign = 'left';
+                ctx.shadowBlur = 0;
+                const newsMaxWidth = canvasWidth - CONFIG.padding.left - CONFIG.padding.right;
                 let currentY = CONFIG.newsStartY;
-                const newsMaxW = canvasW - CONFIG.padding.left - CONFIG.padding.right;
-                const drawNews = DATA.news.length > 0 ? DATA.news : [
-                    '暂无今日新闻1', '暂无今日新闻2', '暂无今日新闻3'
-                ];
 
-                drawNews.forEach((news, index) => {
-                    const newsText = news || `暂无新闻${index + 1}`;
-                    const text = `${index + 1}、${newsText.trim()}`;
-                    const newsLines = wrapText(ctx, text, CONFIG.padding.left, currentY, newsMaxW, CONFIG.font.news);
-                    newsLines.forEach(line => ctx.fillText(line.text, line.x, line.y));
-                    currentY = newsLines.at(-1).y + CONFIG.font.news.size * CONFIG.font.lineHeight * 1.1;
+                DATA.news.forEach((news, index) => {
+                    const newsText = `${index + 1}、${news.trim()}`;
+                    const lines = wrapText(ctx, newsText, CONFIG.padding.left, currentY, newsMaxWidth, CONFIG.font.news);
+                    
+                    // 逐行绘制新闻
+                    lines.forEach(line => {
+                        ctx.fillText(line.text, CONFIG.padding.left, line.y);
+                        currentY = line.y + CONFIG.font.news.size * CONFIG.lineHeight;
+                    });
+                    // 每条新闻后增加间距
+                    currentY += 10;
                 });
-                console.log('新闻绘制完成，共', drawNews.length, '条');
 
-                // 8. 绘制微语
+                // 7. 绘制微语（新闻下方，视觉区分）
+                currentY += 20; // 微语与新闻间距
                 const weiyuText = `【微语】${DATA.tip}`;
-                const weiyuLines = wrapText(ctx, weiyuText, CONFIG.padding.left, currentY, newsMaxW, CONFIG.font.weiyu);
+                const weiyuLines = wrapText(ctx, weiyuText, CONFIG.padding.left, currentY, newsMaxWidth, CONFIG.font.weiyu);
                 weiyuLines.forEach(line => {
-                    ctx.font = `${CONFIG.font.weiyu.weight || 'normal'} ${CONFIG.font.weiyu.size}px ${CONFIG.font.weiyu.family}`;
-                    ctx.fillStyle = CONFIG.font.weiyu.color;
-                    ctx.fillText(line.text, line.x, line.y);
+                    ctx.fillText(line.text, CONFIG.padding.left, line.y);
+                    currentY = line.y + CONFIG.font.weiyu.size * CONFIG.lineHeight;
                 });
-                console.log('微语绘制完成：', weiyuText);
 
-                // 9. 裁剪画布
-                const clipHeight = weiyuLines.at(-1).y + CONFIG.font.weiyu.size * CONFIG.font.lineHeight + CONFIG.clipExtra;
-                const clipCanvas = document.createElement('canvas');
-                clipCanvas.width = canvasW;
-                clipCanvas.height = clipHeight;
-                const clipCtx = clipCanvas.getContext('2d');
-                drawWhiteBackground(clipCtx, canvasW, clipHeight);
-                clipCtx.drawImage(canvas, 0, 0, canvasW, clipHeight, 0, 0, canvasW, clipHeight);
+                // 8. 绘制Footer（微语下方）
+                currentY += 30; // Footer与微语间距
+                ctx.drawImage(footerImg, 0, currentY, canvasWidth, CONFIG.footerHeight);
 
-                // 10. 最终画布（拼接Footer）
+                // 9. 裁剪画布（仅裁剪到实际内容高度，保留所有绘制内容）
+                const finalHeight = currentY + CONFIG.footerHeight + CONFIG.clipExtra;
+                // 创建最终画布，避免裁剪原画布
                 const finalCanvas = document.createElement('canvas');
-                finalCanvas.width = canvasW;
-                finalCanvas.height = clipHeight + (footerImg.height || 100);
+                finalCanvas.width = canvasWidth;
+                finalCanvas.height = finalHeight;
                 const finalCtx = finalCanvas.getContext('2d');
-                drawWhiteBackground(finalCtx, canvasW, finalCanvas.height);
-                finalCtx.drawImage(clipCanvas, 0, 0);
                 
-                // Footer兜底绘制
-                if (footerImg.complete) {
-                    finalCtx.drawImage(footerImg, 0, clipHeight);
-                } else {
-                    ctx.fillStyle = '#2c3e50';
-                    ctx.fillRect(0, clipHeight, canvasW, 100);
-                }
+                // 复制原画布内容到最终画布
+                finalCtx.fillStyle = '#ffffff';
+                finalCtx.fillRect(0, 0, canvasWidth, finalHeight);
+                finalCtx.drawImage(canvas, 0, 0, canvasWidth, finalHeight, 0, 0, canvasWidth, finalHeight);
 
-                // 11. 生成Base64
+                // 10. 生成Base64（强制PNG，高质量）
                 window.IMAGE_BASE64 = finalCanvas.toDataURL('image/png', 1.0);
-                console.log('图片生成成功，Base64长度：', window.IMAGE_BASE64.length);
+                console.log('图片生成完成，最终尺寸：', canvasWidth + 'x' + finalHeight);
+                console.log('Base64长度：', window.IMAGE_BASE64.length);
 
             } catch (err) {
-                console.error('图片生成失败：', err);
+                console.error('绘制失败：', err);
                 window.IMAGE_ERROR = err.message;
             }
         }
