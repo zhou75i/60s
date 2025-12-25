@@ -1,3 +1,0 @@
-git add package.json
-git commit -m "fix: 添加fast-deep-equal依赖"
-git push
