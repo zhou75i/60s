@@ -39,10 +39,24 @@ if (!process.env.GH_TOKEN) {
 }
 
 /**
- * 工具函数：获取当日日期（YYYY-MM-DD）
+ * 工具函数：获取北京时间的当日日期（YYYY-MM-DD）【核心修改】
  */
 function getTodayDate() {
-    return new Date().toISOString().split('T')[0];
+    const now = new Date();
+    // 北京时间 = UTC + 8小时，转换为北京时间的Date对象
+    const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+    // 格式化为 YYYY-MM-DD
+    return beijingTime.toISOString().split('T')[0];
+}
+
+/**
+ * 工具函数：获取带北京时间的日志时间戳【核心修改】
+ */
+function getBeijingTimeStamp() {
+    return new Date().toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai', // 强制使用上海时区（北京时间）
+        hour12: false 
+    });
 }
 
 /**
@@ -51,7 +65,7 @@ function getTodayDate() {
 async function fetchAndCheckApiData() {
     const today = getTodayDate();
     try {
-        console.log(`[${new Date().toLocaleString()}] 请求API获取当日(${today})数据...`);
+        console.log(`[${getBeijingTimeStamp()}] 请求API获取当日(${today})数据...`);
         const response = await fetch(CONFIG.api.url, {
             method: 'GET',
             headers: {
@@ -67,9 +81,9 @@ async function fetchAndCheckApiData() {
         const apiRes = await response.json();
         const apiData = apiRes.data || {};
 
-        // 校验1：API返回的date是否为当日
+        // 校验1：API返回的date是否为北京时间的当日
         if (apiData.date !== today) {
-            console.log(`[${new Date().toLocaleString()}] ❌ API未返回当日(${today})数据，当前返回日期：${apiData.date || '无'}，退出本次执行`);
+            console.log(`[${getBeijingTimeStamp()}] ❌ API未返回当日(${today})数据，当前返回日期：${apiData.date || '无'}，退出本次执行`);
             process.exit(1); // 返回非0状态码，让Actions认为本次执行失败
         }
 
@@ -80,11 +94,11 @@ async function fetchAndCheckApiData() {
             throw new Error(`当日数据缺失核心字段：${missingFields.join(', ')}`);
         }
 
-        console.log(`[${new Date().toLocaleString()}] ✅ 成功获取当日(${today})更新数据`);
+        console.log(`[${getBeijingTimeStamp()}] ✅ 成功获取当日(${today})更新数据`);
         return apiData;
 
     } catch (err) {
-        console.error(`[${new Date().toLocaleString()}] API请求异常：${err.message}，退出本次执行`);
+        console.error(`[${getBeijingTimeStamp()}] API请求异常：${err.message}，退出本次执行`);
         process.exit(1);
     }
 }
@@ -262,11 +276,11 @@ async function main() {
         const imageFilePath = `${CONFIG.repo.imgPath}${today}.png`;
         await uploadToGitHub(imageFilePath, imageBuffer);
 
-        console.log(`[${new Date().toLocaleString()}] ✅ 当日(${today})任务全部完成`);
+        console.log(`[${getBeijingTimeStamp()}] ✅ 当日(${today})任务全部完成`);
         process.exit(0);
 
     } catch (err) {
-        console.error(`[${new Date().toLocaleString()}] ❌ 任务执行失败：${err.message}`);
+        console.error(`[${getBeijingTimeStamp()}] ❌ 任务执行失败：${err.message}`);
         process.exit(1);
     }
 }
