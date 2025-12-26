@@ -1,9 +1,9 @@
 name: Auto Crawl 60s Data and Generate Image
 
-# 定时触发：北京时间1:20-2:30每10分钟执行（UTC=北京时间-8 → UTC 17:00-18:00）
+# 定时触发：北京时间1:20/1:30/1:40/1:50执行（UTC 17:20/30/40/50）【核心修改】
 on:
   schedule:
-    - cron: '0,10,20,30,40,50 17 * * *'
+    - cron: '20,30,40,50 17 * * *'
   workflow_dispatch: # 手动触发（方便测试）
 
 jobs:
@@ -33,8 +33,8 @@ jobs:
           REPO_NAME: ${{ secrets.REPO_NAME }}
           BRANCH: main
         run: |
-          # 最大重试次数（6次=1小时，可调整）
-          MAX_RETRIES=6
+          # 最大重试次数（4次=40分钟，适配1:20-2:00的时间窗口）【可选优化】
+          MAX_RETRIES=4
           RETRY_COUNT=0
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
